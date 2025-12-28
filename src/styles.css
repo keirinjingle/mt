@@ -1,0 +1,18 @@
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont,
+    "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+  background: #fafafa;
+  color: #222;
+}
+
+.app {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 12px;
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 16px;
+}
