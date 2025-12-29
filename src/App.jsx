@@ -456,37 +456,48 @@ export default function App() {
         <style>{cssText}</style>
 
         <header style={styles.header}>
+          {/* 上段：タイトル＋日付（左）／ 右にアイコン群 */}
           <div style={styles.headerTop}>
-            <div style={styles.title}>
-              {APP_TITLE} <span style={{ opacity: 0.9 }}>🐾</span>
+            <div style={styles.titleRow}>
+              <div style={styles.title}>
+                {APP_TITLE} <span style={{ opacity: 0.9 }}>🐾</span>
+              </div>
+              <div style={styles.dateInline}>{todayLabel}</div>
             </div>
 
             <div style={styles.rightHead}>
-              <button className="iconBtn" onClick={() => setHash("home")} aria-label="home">
-                ←
+              {/* 設定（大きめ） */}
+              <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">
+                ⚙︎
               </button>
 
-              <div style={styles.modeSwitch}>
-                <button
-                  className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`}
-                  onClick={() => setMode(MODE_KEIRIN)}
-                >
-                  競輪
-                </button>
-                <button
-                  className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`}
-                  onClick={() => setMode(MODE_AUTORACE)}
-                >
-                  オート
-                </button>
-              </div>
+              {/* 通知一覧へ（≡）。既に notifications ルートを持っている前提 */}
+              <button className="iconBtn" onClick={() => setHash("notifications")} aria-label="notifications">
+                ≡
+              </button>
             </div>
           </div>
 
-          <div style={styles.subRow}>
-           <div style={styles.date}>{todayLabel}</div>
+          {/* 下段：競輪/オート タブ */}
+          <div style={styles.modeRow}>
+            <div style={styles.modeSwitch}>
+              <button
+                className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`}
+                onClick={() => setMode(MODE_KEIRIN)}
+              >
+                競輪
+              </button>
+              <button
+                className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`}
+                onClick={() => setMode(MODE_AUTORACE)}
+              >
+                オート
+              </button>
+            </div>
           </div>
         </header>
+
+
 
         <NotificationsPage
           mode={mode}
@@ -586,22 +597,14 @@ export default function App() {
                     {v.grade ? <span className="grade">{v.grade}</span> : null}
                   </div>
 
-                  <div className="venueMeta">
-                    {/* ベルは外す（数だけ） */}
-                    <span className="badge">
-                      {venueSelectedCount}/{v.races.length}
-                    </span>
+                  <div className="venueActions" onClick={(e) => e.stopPropagation()}>
+                    <button className="smallBtn on" onClick={() => setVenueAll(v, true)}>
+                      ON
+                    </button>
+                    <button className="smallBtn off" onClick={() => setVenueAll(v, false)}>
+                      OFF
+                    </button>
                   </div>
-                </div>
-
-                <div className="venueControls">
-                  <button className="btn" onClick={() => setVenueAll(v, true)}>
-                    すべてON
-                  </button>
-                  <button className="btn ghost" onClick={() => setVenueAll(v, false)}>
-                    すべてOFF
-                  </button>
-                </div>
 
                 {isOpen && (
                   <div className="raceList">
@@ -787,6 +790,10 @@ export default function App() {
  * Flutter(Material3, green seed)っぽい見た目に寄せる（太字を抑える）
  */
 const styles = {
+  titleRow: { display: "flex", alignItems: "baseline", gap: 10 },
+  dateInline: { fontSize: 13, fontWeight: 500, opacity: 0.85 },
+  modeRow: { marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" },
+
   page: {
     minHeight: "100vh",
     background:
@@ -865,11 +872,16 @@ const cssText = `
 .iconBtn{
   border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.80);
-  width: 40px;
-  height: 40px;
-  border-radius: 14px;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
   cursor: pointer;
   font-weight: 600;
+  font-size: 20px; /* ← アイコンを大きく */
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .iconBtn.bigIcon{
   width: 48px;
@@ -957,6 +969,33 @@ const cssText = `
   opacity: 0.9;
 }
 .chev{ width: 22px; display:inline-flex; justify-content:center; opacity:0.7; }
+
+.venueActions{
+  display:flex;
+  gap: 8px;
+  align-items:center;
+}
+
+.smallBtn{
+  border: 1px solid rgba(0,0,0,0.10);
+  background: rgba(255,255,255,0.80);
+  padding: 8px 10px;
+  border-radius: 14px;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.smallBtn.on{
+  border-color: rgba(46,125,50,0.25);
+  background: rgba(46,125,50,0.14);
+}
+
+.smallBtn.off{
+  background: rgba(0,0,0,0.02);
+}
+
+
 .venueMeta{ display:flex; gap: 8px; }
 .badge{
   font-size: 12px;
