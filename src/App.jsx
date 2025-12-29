@@ -1,16 +1,14 @@
 import React, { useEffect, useMemo, useState } from "react";
 
 /**
- * =========================
- *  もふタイマー（最小・全部入り）
- *  - 会場アコーディオン
- *  - レースごとトグル（Timer① / Timer②）
- *  - 設定画面（無料1 / 有料2、5/4/3/2/1分前、通知タップ先URL）
- *  - start_time から通知時刻を逆算（closed_atは保険）
- * =========================
+ * もふタイマー Web（最小・全部入り）
+ * - Vite + React
+ * - GitHub Pages: base "/mt/"
+ * - 当日のみ（GitHub Pages上のJSON）
+ * - 会場アコーディオン + レース行トグル（1つ）
+ * - 設定で「2つ目タイマーON」なら 2回分の通知時刻を表示（同一トグル）
  */
 
-// ---- 設定
 const APP_TITLE = "もふタイマー";
 const BASE = "https://keirinjingle.github.io";
 
@@ -21,16 +19,18 @@ const MINUTE_OPTIONS = [5, 4, 3, 2, 1];
 
 const STORAGE_USER_ID = "mofu_anon_user_id";
 const STORAGE_OPEN_VENUES = "mofu_open_venues_v1";
+const STORAGE_TOGGLED = "mofu_race_toggled_v1";
+const STORAGE_SETTINGS = "mofu_settings_v2";
 
-// Timer①/② の選択状態（レースキーごと）
-const STORAGE_T1 = "mofu_timer1_selected_v1"; // { [raceKey]: true }
-const STORAGE_T2 = "mofu_timer2_selected_v1"; // { [raceKey]: true }
+const DEFAULT_SETTINGS = {
+  timer1MinutesBefore: 5,
+  timer2Enabled: false, // ✅ 2つ目ON/OFF
+  timer2MinutesBefore: 2,
+  linkTarget: "json",
+  proCode: "",
+};
 
-// 設定
-const STORAGE_SETTINGS = "mofu_settings_v1";
-// { timer1MinutesBefore: 5, timer2MinutesBefore: 2, linkTarget: "json", proCode: "xxxx" }
-
-// ---- 通知タップ先の候補
+// 通知タップ先（今は「開く」ボタンに反映）
 const LINK_TARGETS = [
   { key: "json", label: "ネット競輪（JSON内のURL）" },
   { key: "oddspark", label: "オッズパーク" },
@@ -56,7 +56,6 @@ function getLinkUrl(linkTargetKey, raceUrlFromJson) {
   }
 }
 
-// ---- Utils
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
@@ -98,7 +97,6 @@ function ensureAnonUserId() {
   return uuid;
 }
 
-// ---- Fetch
 async function fetchRacesJson(mode) {
   const date = todayKeyYYYYMMDD();
   const url =
@@ -113,7 +111,7 @@ async function fetchRacesJson(mode) {
 
 /**
  * raw = [
- *  { venue, grade, races:[{ race_number, start_time, closed_at, url, class_category, players... }...] },
+ *  { venue, grade, races:[{ race_number, start_time, closed_at, url, class_category... }...] },
  *  ...
  * ]
  */
@@ -143,8 +141,9 @@ function normalizeRace(r, mode, v, ri) {
   const raceNo =
     Number(r.race_number ?? r.raceNo ?? r.race_no ?? r.race ?? r.no ?? (ri + 1)) || (ri + 1);
 
-  const startTimeHHMM = r.start_time || r.startTime || r.start || "";
-  const closedAtHHMM = r.closed_at || r.closedAt || ""; // 保険（5分前固定など）
+  // ✅ closed_at を堅く拾う（表記ゆれ吸収）
+  const closedAtHHMM =
+    r.closed_at || r.closedAt || r.close_at || r.closeAt || r.deadline || r.shimekiri || "";
 
   const url = r.url || r.raceUrl || "";
   const title = r.class_category || r.title || r.name || `${raceNo}R`;
@@ -152,7 +151,15 @@ function normalizeRace(r, mode, v, ri) {
   const date = todayKeyYYYYMMDD();
   const raceKey = `${date}_${venueKey}_${pad2(raceNo)}`;
 
-  return { raceKey, venueKey, venueName, raceNo, title, startTimeHHMM, closedAtHHMM, url };
+  return { raceKey, venueKey, venueName, raceNo, title, closedAtHHMM, url };
+}
+
+// ✅ closed_at（締切）から minutesBefore 分前を計算
+function computeNotifyAt(race, minutesBefore) {
+  const closed = parseHHMMToday(race.closedAtHHMM);
+  const m = Number(minutesBefore);
+  if (!closed || !Number.isFinite(m)) return null;
+  return addMinutes(closed, -m);
 }
 
 export default function App() {
@@ -169,23 +176,17 @@ export default function App() {
     safeJsonParse(localStorage.getItem(STORAGE_OPEN_VENUES) || "{}", {})
   );
 
-  const [t1, setT1] = useState(() =>
-    safeJsonParse(localStorage.getItem(STORAGE_T1) || "{}", {})
-  );
-  const [t2, setT2] = useState(() =>
-    safeJsonParse(localStorage.getItem(STORAGE_T2) || "{}", {})
+  // ✅ レースのトグルは1つだけ
+  const [toggled, setToggled] = useState(() =>
+    safeJsonParse(localStorage.getItem(STORAGE_TOGGLED) || "{}", {})
   );
 
-  const [settings, setSettings] = useState(() =>
-    safeJsonParse(localStorage.getItem(STORAGE_SETTINGS) || "{}", {
-      timer1MinutesBefore: 5,
-      timer2MinutesBefore: 2,
-      linkTarget: "json",
-      proCode: "",
-    })
-  );
+  // ✅ デフォルト設定を確実にマージ（NaN防止）
+  const [settings, setSettings] = useState(() => {
+    const stored = safeJsonParse(localStorage.getItem(STORAGE_SETTINGS) || "null", null);
+    return { ...DEFAULT_SETTINGS, ...(stored || {}) };
+  });
 
-  // 設定画面の開閉（簡易）
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   // now（グレーアウト更新）
@@ -197,6 +198,7 @@ export default function App() {
 
   // pro判定（ゆるく：コードが入ってれば有料扱い）
   const isPro = !!(settings.proCode && String(settings.proCode).trim().length > 0);
+  const timer2Active = isPro && !!settings.timer2Enabled;
 
   // データ取得
   useEffect(() => {
@@ -229,11 +231,8 @@ export default function App() {
     localStorage.setItem(STORAGE_OPEN_VENUES, JSON.stringify(openVenues));
   }, [openVenues]);
   useEffect(() => {
-    localStorage.setItem(STORAGE_T1, JSON.stringify(t1));
-  }, [t1]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_T2, JSON.stringify(t2));
-  }, [t2]);
+    localStorage.setItem(STORAGE_TOGGLED, JSON.stringify(toggled));
+  }, [toggled]);
   useEffect(() => {
     localStorage.setItem(STORAGE_SETTINGS, JSON.stringify(settings));
   }, [settings]);
@@ -247,58 +246,24 @@ export default function App() {
     setOpenVenues((prev) => ({ ...prev, [venueKey]: !prev[venueKey] }));
   }
 
-  function setVenueAll(venue, timerIndex, on) {
-    if (timerIndex === 1) {
-      setT1((prev) => {
-        const next = { ...prev };
-        for (const r of venue.races) {
-          if (on) next[r.raceKey] = true;
-          else delete next[r.raceKey];
-        }
-        return next;
-      });
-      return;
-    }
-    if (timerIndex === 2) {
-      setT2((prev) => {
-        const next = { ...prev };
-        for (const r of venue.races) {
-          if (on) next[r.raceKey] = true;
-          else delete next[r.raceKey];
-        }
-        return next;
-      });
-    }
+  function setVenueAll(venue, on) {
+    setToggled((prev) => {
+      const next = { ...prev };
+      for (const r of venue.races) {
+        if (on) next[r.raceKey] = true;
+        else delete next[r.raceKey];
+      }
+      return next;
+    });
   }
 
-  function toggleRace(timerIndex, raceKey) {
-    if (timerIndex === 1) {
-      setT1((prev) => {
-        const next = { ...prev };
-        if (next[raceKey]) delete next[raceKey];
-        else next[raceKey] = true;
-        return next;
-      });
-      return;
-    }
-    if (timerIndex === 2) {
-      setT2((prev) => {
-        const next = { ...prev };
-        if (next[raceKey]) delete next[raceKey];
-        else next[raceKey] = true;
-        return next;
-      });
-    }
-  }
-
-  // start_time があればそこから逆算、無ければ closed_at を使う
-  function computeNotifyAt(race, minutesBefore) {
-    const start = parseHHMMToday(race.startTimeHHMM);
-    if (start) return addMinutes(start, -minutesBefore);
-
-    const closed = parseHHMMToday(race.closedAtHHMM);
-    if (closed) return closed; // フォールバック（JSONがすでに5分前など）
-    return null;
+  function toggleRace(raceKey) {
+    setToggled((prev) => {
+      const next = { ...prev };
+      if (next[raceKey]) delete next[raceKey];
+      else next[raceKey] = true;
+      return next;
+    });
   }
 
   function openLinkForRace(race) {
@@ -307,9 +272,8 @@ export default function App() {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  // 表示用カウント
-  const t1Count = useMemo(() => Object.keys(t1).length, [t1]);
-  const t2Count = useMemo(() => Object.keys(t2).length, [t2]);
+  // 表示用カウント（1つだけ）
+  const selectedCount = useMemo(() => Object.keys(toggled).length, [toggled]);
 
   return (
     <div style={styles.page}>
@@ -320,7 +284,7 @@ export default function App() {
           <div style={styles.title}>{APP_TITLE}</div>
 
           <div style={styles.rightHead}>
-            <button className="iconBtn" onClick={() => setSettingsOpen(true)}>
+            <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">
               ⚙︎
             </button>
 
@@ -343,11 +307,10 @@ export default function App() {
 
         <div style={styles.subRow}>
           <div style={styles.date}>{todayLabel}（当日のみ）</div>
-
           <div className="counts">
-            <span className="countPill">① {t1Count}</span>
-            <span className={`countPill ${isPro ? "" : "locked"}`}>
-              ② {isPro ? t2Count : "LOCK"}
+            <span className="countPill">🔔 {selectedCount}</span>
+            <span className={`countPill ${timer2Active ? "countOn" : "countOff"}`}>
+              2nd {timer2Active ? "ON" : "OFF"}
             </span>
           </div>
         </div>
@@ -372,8 +335,10 @@ export default function App() {
           venues.map((v) => {
             const isOpen = !!openVenues[v.venueKey];
 
-            const t1SelectedCount = v.races.reduce((acc, r) => acc + (t1[r.raceKey] ? 1 : 0), 0);
-            const t2SelectedCount = v.races.reduce((acc, r) => acc + (t2[r.raceKey] ? 1 : 0), 0);
+            const venueSelectedCount = v.races.reduce(
+              (acc, r) => acc + (toggled[r.raceKey] ? 1 : 0),
+              0
+            );
 
             return (
               <section className="card" key={v.venueKey}>
@@ -385,53 +350,41 @@ export default function App() {
                   </div>
 
                   <div className="venueMeta">
-                    <span className="badge">① {t1SelectedCount}/{v.races.length}</span>
-                    <span className={`badge ${isPro ? "" : "badgeLocked"}`}>
-                      ② {isPro ? `${t2SelectedCount}/${v.races.length}` : "LOCK"}
+                    <span className="badge">
+                      🔔 {venueSelectedCount}/{v.races.length}
                     </span>
                   </div>
                 </div>
 
                 <div className="venueControls">
-                  <button className="btn" onClick={() => setVenueAll(v, 1, true)}>
-                    ① 全ON
+                  <button className="btn" onClick={() => setVenueAll(v, true)}>
+                    すべてON
                   </button>
-                  <button className="btn ghost" onClick={() => setVenueAll(v, 1, false)}>
-                    ① 全OFF
-                  </button>
-
-                  <div className="sep" />
-
-                  <button
-                    className={`btn ${isPro ? "" : "btnLocked"}`}
-                    onClick={() => isPro && setVenueAll(v, 2, true)}
-                    title={isPro ? "" : "有料ロック中"}
-                  >
-                    ② 全ON
-                  </button>
-                  <button
-                    className={`btn ghost ${isPro ? "" : "btnLocked"}`}
-                    onClick={() => isPro && setVenueAll(v, 2, false)}
-                    title={isPro ? "" : "有料ロック中"}
-                  >
-                    ② 全OFF
+                  <button className="btn ghost" onClick={() => setVenueAll(v, false)}>
+                    すべてOFF
                   </button>
                 </div>
 
                 {isOpen && (
                   <div className="raceList">
                     {v.races.map((r) => {
+                      const closedAt = parseHHMMToday(r.closedAtHHMM);
+
                       const n1 = computeNotifyAt(r, settings.timer1MinutesBefore);
                       const past1 = n1 ? now.getTime() >= n1.getTime() : false;
 
-                      const n2 = isPro ? computeNotifyAt(r, settings.timer2MinutesBefore) : null;
-                      const past2 = isPro && n2 ? now.getTime() >= n2.getTime() : false;
+                      const n2 = timer2Active
+                        ? computeNotifyAt(r, settings.timer2MinutesBefore)
+                        : null;
+                      const past2 = timer2Active && n2 ? now.getTime() >= n2.getTime() : false;
 
-                      const checked1 = !!t1[r.raceKey];
-                      const checked2 = !!t2[r.raceKey];
+                      // ✅ レースは「締切（closed_at）」を過ぎたらグレーアウト（Flutterに近い）
+                      const ended = closedAt ? now.getTime() >= closedAt.getTime() : false;
+
+                      const checked = !!toggled[r.raceKey];
 
                       return (
-                        <div key={r.raceKey} className={`raceRow ${past1 && past2 ? "past" : ""}`}>
+                        <div key={r.raceKey} className={`raceRow ${ended ? "ended" : ""}`}>
                           <div className="raceLeft">
                             <div className="raceTopLine">
                               <div className="raceNo">{r.raceNo}R</div>
@@ -442,45 +395,39 @@ export default function App() {
                             </div>
 
                             <div className="raceTimeLine">
-                              <span className={`timePill ${past1 ? "timePast" : ""}`}>
-                                ① 締切 <b>{n1 ? toHHMM(n1) : "--:--"}</b>（{settings.timer1MinutesBefore}分前）
+                              <span className="timePill">
+                                締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b>
                               </span>
 
-                              <span className={`timePill ${isPro ? "" : "timeLocked"} ${past2 ? "timePast" : ""}`}>
-                                ② 締切{" "}
-                                <b>{isPro ? (n2 ? toHHMM(n2) : "--:--") : "LOCK"}</b>
-                                {isPro ? `（${settings.timer2MinutesBefore}分前）` : ""}
+                              <span className={`timePill ${past1 ? "timePast" : ""}`}>
+                                通知 <b>{n1 ? toHHMM(n1) : "--:--"}</b>（{settings.timer1MinutesBefore}分前）
                               </span>
+
+                              {timer2Active && (
+                                <span className={`timePill ${past2 ? "timePast" : ""}`}>
+                                  2回目 <b>{n2 ? toHHMM(n2) : "--:--"}</b>（{settings.timer2MinutesBefore}分前）
+                                </span>
+                              )}
+
+                              {!timer2Active && (
+                                <span className="timePill timeLocked">
+                                  2回目 OFF（設定でON）
+                                </span>
+                              )}
                             </div>
                           </div>
 
                           <div className="raceRight">
-                            <div className="toggles">
-                              <div className={`toggleWrap ${past1 ? "togglePast" : ""}`}>
-                                <div className="toggleLabel">①</div>
-                                <label className="toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked1}
-                                    onChange={() => toggleRace(1, r.raceKey)}
-                                    disabled={past1}
-                                  />
-                                  <span className="slider" />
-                                </label>
-                              </div>
-
-                              <div className={`toggleWrap ${isPro ? "" : "toggleLocked"} ${past2 ? "togglePast" : ""}`}>
-                                <div className="toggleLabel">②</div>
-                                <label className="toggle">
-                                  <input
-                                    type="checkbox"
-                                    checked={checked2}
-                                    onChange={() => toggleRace(2, r.raceKey)}
-                                    disabled={!isPro || past2}
-                                  />
-                                  <span className="slider" />
-                                </label>
-                              </div>
+                            <div className="toggleWrap">
+                              <label className="toggle">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleRace(r.raceKey)}
+                                  disabled={ended}
+                                />
+                                <span className="slider" />
+                              </label>
                             </div>
                           </div>
                         </div>
@@ -493,13 +440,7 @@ export default function App() {
           })}
       </main>
 
-      <footer style={styles.footer}>
-        <div style={{ opacity: 0.85 }}>
-          ※ 次は「通知の実装（Web Push / ネイティブ連携）」に進めます
-        </div>
-      </footer>
-
-      {/* ===== 設定画面（簡易モーダル） ===== */}
+      {/* ===== 設定画面 ===== */}
       {settingsOpen && (
         <div className="modalBack" onClick={() => setSettingsOpen(false)}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -512,7 +453,7 @@ export default function App() {
 
             <div className="modalBody">
               <div className="row">
-                <div className="label">タイマー①（無料）</div>
+                <div className="label">通知①（分前）</div>
                 <select
                   value={settings.timer1MinutesBefore}
                   onChange={(e) =>
@@ -528,14 +469,26 @@ export default function App() {
               </div>
 
               <div className="row">
-                <div className="label">タイマー②（有料）</div>
+                <div className="label">2つ目タイマー</div>
+                <label className="switchLine">
+                  <input
+                    type="checkbox"
+                    checked={!!settings.timer2Enabled}
+                    onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
+                    disabled={!isPro}
+                  />
+                  <span>{isPro ? "ON/OFF" : "有料コードで解放"}</span>
+                </label>
+              </div>
+
+              <div className="row">
+                <div className="label">通知②（分前）</div>
                 <select
                   value={settings.timer2MinutesBefore}
-                  disabled={!isPro}
+                  disabled={!isPro || !settings.timer2Enabled}
                   onChange={(e) =>
                     setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))
                   }
-                  title={isPro ? "" : "有料ロック中"}
                 >
                   {MINUTE_OPTIONS.map((m) => (
                     <option key={m} value={m}>
@@ -543,7 +496,6 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                {!isPro && <div className="hint">※ 有料コードを入れると有効</div>}
               </div>
 
               <div className="row">
@@ -568,20 +520,14 @@ export default function App() {
                   placeholder="コードを入力（空なら無料）"
                 />
                 <div className={`pill ${isPro ? "pillOn" : "pillOff"}`}>
-                  {isPro ? "PRO：②タイマー有効" : "FREE：①のみ"}
+                  {isPro ? "PRO：2つ目が使える" : "FREE：1つだけ"}
                 </div>
               </div>
 
               <div className="row">
                 <div className="label">選択のリセット</div>
-                <button
-                  className="btn danger"
-                  onClick={() => {
-                    setT1({});
-                    setT2({});
-                  }}
-                >
-                  ①② を全解除
+                <button className="btn danger" onClick={() => setToggled({})}>
+                  すべて解除
                 </button>
               </div>
             </div>
@@ -599,24 +545,23 @@ export default function App() {
 }
 
 /**
- * =========================
- *  Styles
- * =========================
+ * Flutter(Material3, green seed)っぽい見た目に寄せる（次チャットで微調整OK）
  */
 const styles = {
   page: {
     minHeight: "100vh",
-    background: "linear-gradient(180deg, #eef9f2 0%, #f7fbf8 50%, #ffffff 100%)",
-    color: "#123",
+    background:
+      "linear-gradient(180deg, rgba(232,245,233,1) 0%, rgba(241,248,242,1) 45%, rgba(255,255,255,1) 100%)",
+    color: "#102014",
     fontFamily:
-      'ui-sans-serif, system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", Segoe UI, Roboto, Arial',
+      'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Sans", Arial, sans-serif',
   },
   header: {
     position: "sticky",
     top: 0,
     zIndex: 5,
     backdropFilter: "blur(10px)",
-    background: "rgba(238, 249, 242, 0.75)",
+    background: "rgba(232,245,233,0.80)",
     borderBottom: "1px solid rgba(0,0,0,0.06)",
     padding: "14px 14px 10px",
   },
@@ -640,25 +585,20 @@ const styles = {
   },
   main: {
     padding: 14,
-    maxWidth: 780,
+    maxWidth: 820,
     margin: "0 auto",
     display: "grid",
     gap: 12,
   },
-  footer: {
-    padding: 20,
-    textAlign: "center",
-    fontSize: 12,
-    color: "rgba(0,0,0,0.55)",
-  },
+  date: { fontWeight: 800 },
 };
 
 const cssText = `
 .card{
   background: rgba(255,255,255,0.92);
   border: 1px solid rgba(0,0,0,0.06);
-  border-radius: 16px;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.05);
+  border-radius: 18px;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.06);
   padding: 12px;
 }
 .card.error{
@@ -668,23 +608,23 @@ const cssText = `
 
 .chip{
   border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.75);
-  padding: 8px 12px;
+  background: rgba(255,255,255,0.80);
+  padding: 9px 14px;
   border-radius: 999px;
   cursor: pointer;
-  font-weight: 800;
+  font-weight: 900;
 }
 .chipOn{
-  border-color: rgba(0,120,70,0.25);
-  background: rgba(140, 230, 170, 0.26);
+  border-color: rgba(46,125,50,0.25);
+  background: rgba(46,125,50,0.14);
 }
 
 .iconBtn{
   border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.75);
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
+  background: rgba(255,255,255,0.80);
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
   cursor: pointer;
   font-weight: 900;
 }
@@ -693,15 +633,19 @@ const cssText = `
 .countPill{
   font-size: 12px;
   font-weight: 900;
-  padding: 6px 10px;
+  padding: 7px 12px;
   border-radius: 999px;
-  background: rgba(0, 120, 70, 0.12);
-  border: 1px solid rgba(0, 120, 70, 0.12);
+  background: rgba(46,125,50,0.12);
+  border: 1px solid rgba(46,125,50,0.12);
 }
-.countPill.locked{
-  background: rgba(0,0,0,0.06);
-  border-color: rgba(0,0,0,0.06);
-  color: rgba(0,0,0,0.45);
+.countPill.countOff{
+  background: rgba(0,0,0,0.05);
+  border-color: rgba(0,0,0,0.05);
+  color: rgba(0,0,0,0.55);
+}
+.countPill.countOn{
+  background: rgba(46,125,50,0.18);
+  border-color: rgba(46,125,50,0.18);
 }
 
 .venueHead{
@@ -715,81 +659,77 @@ const cssText = `
 .venueTitle{
   display:flex;
   align-items:center;
-  gap: 8px;
+  gap: 10px;
   font-weight: 900;
+  font-size: 18px;
 }
 .grade{
   font-size: 12px;
   font-weight: 900;
-  padding: 4px 8px;
+  padding: 5px 10px;
   border-radius: 999px;
-  background: rgba(0, 120, 70, 0.10);
-  border: 1px solid rgba(0, 120, 70, 0.10);
+  background: rgba(46,125,50,0.10);
+  border: 1px solid rgba(46,125,50,0.10);
   opacity: 0.9;
 }
-.chev{ width: 20px; display:inline-flex; justify-content:center; opacity:0.7; }
+.chev{ width: 22px; display:inline-flex; justify-content:center; opacity:0.7; }
 .venueMeta{ display:flex; gap: 8px; }
 .badge{
   font-size: 12px;
   font-weight: 900;
-  padding: 6px 10px;
+  padding: 7px 12px;
   border-radius: 999px;
-  background: rgba(0, 120, 70, 0.12);
-  border: 1px solid rgba(0, 120, 70, 0.12);
-}
-.badgeLocked{
-  background: rgba(0,0,0,0.06);
-  border-color: rgba(0,0,0,0.06);
-  color: rgba(0,0,0,0.45);
+  background: rgba(46,125,50,0.12);
+  border: 1px solid rgba(46,125,50,0.12);
 }
 
 .venueControls{
   display:flex;
-  gap: 8px;
+  gap: 10px;
   align-items:center;
-  padding: 0 6px 10px;
+  padding: 0 6px 12px;
   flex-wrap: wrap;
 }
-.sep{ width: 1px; height: 24px; background: rgba(0,0,0,0.08); margin: 0 4px; }
 
 .btn{
   border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.75);
-  padding: 8px 10px;
-  border-radius: 12px;
+  background: rgba(255,255,255,0.80);
+  padding: 10px 12px;
+  border-radius: 14px;
   cursor: pointer;
   font-weight: 900;
 }
 .btn.ghost{ background: rgba(0,0,0,0.02); }
-.btnLocked{ opacity: 0.45; cursor: not-allowed; }
 .btn.danger{
   border-color: rgba(220,0,0,0.2);
-  background: rgba(255,230,230,0.8);
+  background: rgba(255,230,230,0.85);
 }
 
-.raceList{ display:grid; gap: 8px; padding: 0 6px 6px; }
+.raceList{ display:grid; gap: 10px; padding: 0 6px 6px; }
 
 .raceRow{
   display:flex;
   align-items:flex-start;
   justify-content:space-between;
-  gap: 10px;
-  padding: 10px 10px;
-  border-radius: 14px;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: 18px;
   border: 1px solid rgba(0,0,0,0.06);
-  background: rgba(255,255,255,0.82);
+  background: rgba(255,255,255,0.88);
 }
-.raceRow.past{ opacity: 0.55; }
+.raceRow.ended{
+  opacity: 0.45;
+}
 
 .raceLeft{ min-width: 0; flex: 1; }
-.raceTopLine{ display:flex; align-items:center; gap: 10px; }
-.raceNo{ font-weight: 900; font-size: 14px; }
-.raceTitle{ font-size: 12px; opacity: 0.88; }
+.raceTopLine{ display:flex; align-items:center; gap: 12px; }
+.raceNo{ font-weight: 900; font-size: 18px; }
+.raceTitle{ font-size: 14px; opacity: 0.88; }
 .linkBtn{
   margin-left: auto;
   border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.75);
-  padding: 6px 10px;
+  background: rgba(255,255,255,0.85);
+  padding: 8px 12px;
   border-radius: 999px;
   cursor: pointer;
   font-weight: 900;
@@ -800,69 +740,59 @@ const cssText = `
   display:flex;
   gap: 8px;
   flex-wrap: wrap;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 .timePill{
   font-size: 12px;
   font-weight: 900;
-  padding: 6px 10px;
+  padding: 7px 12px;
   border-radius: 999px;
-  background: rgba(0, 120, 70, 0.10);
-  border: 1px solid rgba(0, 120, 70, 0.10);
+  background: rgba(46,125,50,0.10);
+  border: 1px solid rgba(46,125,50,0.10);
 }
 .timePast{ opacity: 0.55; }
 .timeLocked{
-  background: rgba(0,0,0,0.06);
-  border-color: rgba(0,0,0,0.06);
-  color: rgba(0,0,0,0.45);
+  background: rgba(0,0,0,0.05);
+  border-color: rgba(0,0,0,0.05);
+  color: rgba(0,0,0,0.55);
 }
 
 .raceRight{ display:flex; align-items:center; }
-.toggles{ display:flex; gap: 10px; }
-.toggleWrap{ display:flex; align-items:center; gap: 6px; }
-.toggleLocked{ opacity: 0.45; }
-.togglePast{ opacity: 0.55; }
 
-.toggleLabel{
-  width: 18px;
-  text-align:center;
-  font-weight: 900;
-  font-size: 12px;
-  opacity: 0.9;
-}
-
+/* Toggle */
+.toggleWrap{ display:flex; align-items:center; }
 .toggle{
   position: relative;
   display: inline-block;
-  width: 46px;
-  height: 28px;
+  width: 52px;
+  height: 32px;
 }
 .toggle input{ display:none; }
 .slider{
   position:absolute;
   cursor:pointer;
   inset:0;
-  background: rgba(0,0,0,0.12);
+  background: rgba(0,0,0,0.16);
   border-radius: 999px;
   transition: 0.15s;
 }
 .slider:before{
   content:"";
   position:absolute;
-  height: 22px;
-  width: 22px;
+  height: 26px;
+  width: 26px;
   left: 3px;
   top: 3px;
   background: white;
   border-radius: 50%;
-  box-shadow: 0 3px 10px rgba(0,0,0,0.15);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.18);
   transition: 0.15s;
 }
-.toggle input:checked + .slider{ background: rgba(0, 140, 80, 0.45); }
-.toggle input:checked + .slider:before{ transform: translateX(18px); }
+.toggle input:checked + .slider{ background: rgba(46,125,50,0.55); }
+.toggle input:checked + .slider:before{ transform: translateX(20px); }
 .toggle input:disabled + .slider{ cursor:not-allowed; opacity: 0.8; }
 
-/* ===== Modal ===== */
+/* Modal */
 .modalBack{
   position: fixed;
   inset: 0;
@@ -874,11 +804,11 @@ const cssText = `
   z-index: 50;
 }
 .modal{
-  width: min(680px, 100%);
+  width: min(720px, 100%);
   background: rgba(255,255,255,0.98);
   border: 1px solid rgba(0,0,0,0.10);
-  border-radius: 18px;
-  box-shadow: 0 18px 50px rgba(0,0,0,0.18);
+  border-radius: 20px;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.18);
   overflow:hidden;
 }
 .modalHead{
@@ -887,7 +817,7 @@ const cssText = `
   justify-content:space-between;
   padding: 12px 12px;
   border-bottom: 1px solid rgba(0,0,0,0.08);
-  background: rgba(238, 249, 242, 0.7);
+  background: rgba(232,245,233,0.75);
 }
 .modalTitle{ font-weight: 900; font-size: 14px; }
 .modalBody{ padding: 12px; display:grid; gap: 12px; }
@@ -902,16 +832,21 @@ const cssText = `
 .label{ font-weight: 900; font-size: 12px; opacity: 0.9; }
 select, input{
   border: 1px solid rgba(0,0,0,0.12);
-  background: rgba(255,255,255,0.9);
+  background: rgba(255,255,255,0.92);
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: 14px;
   font-weight: 800;
   outline: none;
 }
-.hint{
-  grid-column: 2 / 3;
-  font-size: 12px;
-  color: rgba(0,0,0,0.55);
+.switchLine{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  font-weight: 900;
+}
+.switchLine input{
+  width: 18px;
+  height: 18px;
 }
 
 .pill{
@@ -919,13 +854,13 @@ select, input{
   width: fit-content;
   font-size: 12px;
   font-weight: 900;
-  padding: 6px 10px;
+  padding: 7px 12px;
   border-radius: 999px;
   border: 1px solid rgba(0,0,0,0.08);
 }
 .pillOn{
-  background: rgba(140, 230, 170, 0.26);
-  border-color: rgba(0,120,70,0.18);
+  background: rgba(46,125,50,0.14);
+  border-color: rgba(46,125,50,0.18);
 }
 .pillOff{
   background: rgba(0,0,0,0.04);
@@ -933,6 +868,6 @@ select, input{
 }
 @media (max-width: 560px){
   .row{ grid-template-columns: 1fr; }
-  .hint, .pill{ grid-column: auto; }
+  .pill{ grid-column: auto; }
 }
 `;
