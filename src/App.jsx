@@ -42,7 +42,6 @@ const STORAGE_TOGGLED = "mofu_race_toggled_v1";
 const STORAGE_SETTINGS = "mofu_settings_v3"; // ★ v3 に更新
 
 const DEFAULT_SETTINGS = {
-  notificationsEnabled: true, // ★ 追加：全体ON/OFF（ヘッダーで切替）
   timer1MinutesBefore: 5,
   timer2Enabled: false, // 2つ目ON/OFF（有料＆設定で有効化）
   timer2MinutesBefore: 2,
@@ -52,7 +51,7 @@ const DEFAULT_SETTINGS = {
 
 /* 通知タップ先（今は「開く」ボタンに反映） */
 const LINK_TARGETS = [
-  { key: "json", label: "ネット競輪（JSON内のURL）" },
+  { key: "json", label: "ネット競輪（レース情報）" },
   { key: "oddspark", label: "オッズパーク" },
   { key: "chariloto", label: "チャリロト" },
   { key: "winticket", label: "WINTICKET" },
@@ -485,18 +484,7 @@ export default function App() {
           </div>
 
           <div style={styles.subRow}>
-            <div style={styles.date}>{todayLabel}</div>
-
-            {/* ヘッダー：通知ON/OFF（縦幅を取らない） */}
-            <label className="miniSwitch" title="通知 全体ON/OFF">
-              <input
-                type="checkbox"
-                checked={!!settings.notificationsEnabled}
-                onChange={(e) => setSettings((p) => ({ ...p, notificationsEnabled: e.target.checked }))}
-              />
-              <span className="miniSlider" />
-              <span className="miniLabel">{settings.notificationsEnabled ? "通知ON" : "通知OFF"}</span>
-            </label>
+           <div style={styles.date}>{todayLabel}</div>
           </div>
         </header>
 
@@ -556,17 +544,6 @@ export default function App() {
         <div style={styles.subRow}>
           {/* 日付のみ（「当日のみ」削除） */}
           <div style={styles.date}>{todayLabel}</div>
-
-          {/* 通知ON/OFFをここへ（ベル数表示は削除） */}
-          <label className="miniSwitch" title="通知 全体ON/OFF">
-            <input
-              type="checkbox"
-              checked={!!settings.notificationsEnabled}
-              onChange={(e) => setSettings((p) => ({ ...p, notificationsEnabled: e.target.checked }))}
-            />
-            <span className="miniSlider" />
-            <span className="miniLabel">{settings.notificationsEnabled ? "通知ON" : "通知OFF"}</span>
-          </label>
         </div>
 
         {/* 広告枠：有料コードで消える */}
@@ -631,14 +608,12 @@ export default function App() {
                     {v.races.map((r) => {
                       const closedAt = parseHHMMToday(r.closedAtHHMM);
 
-                      // 通知計算：通知OFFなら表示も null
-                      const n1 =
-                        settings.notificationsEnabled ? computeNotifyAt(r, settings.timer1MinutesBefore) : null;
+                      // 通知計算：レーストグルがONなら有効（全体ON/OFFは廃止）
+                      const n1 = computeNotifyAt(r, settings.timer1MinutesBefore);
 
-                      const n2 =
-                        settings.notificationsEnabled && timer2Active
-                          ? computeNotifyAt(r, settings.timer2MinutesBefore)
-                          : null;
+                      const n2 = timer2Active
+                       ? computeNotifyAt(r, settings.timer2MinutesBefore)
+                       : null;
 
                       // 「通知時刻を過ぎたら」薄くする（通知① 기준）
                       const past1 = n1 ? now.getTime() >= n1.getTime() : false;
@@ -713,20 +688,6 @@ export default function App() {
             </div>
 
             <div className="modalBody">
-              <div className="row">
-                <div className="label">通知 全体</div>
-                <label className="switchLine">
-                  <input
-                    type="checkbox"
-                    checked={!!settings.notificationsEnabled}
-                    onChange={(e) =>
-                      setSettings((p) => ({ ...p, notificationsEnabled: e.target.checked }))
-                    }
-                  />
-                  <span>{settings.notificationsEnabled ? "ON" : "OFF"}</span>
-                </label>
-              </div>
-
               <div className="row">
                 <div className="label">通知①（分前）</div>
                 <select
