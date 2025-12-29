@@ -1,12 +1,7 @@
-// GitHub Pages 上の当日JSONを取得して、UI表示用に整形する
 const KEIRIN_BASE = "https://keirinjingle.github.io/date";
 const AUTO_BASE = "https://keirinjingle.github.io/autorace";
 
-/**
- * YYYYMMDD を生成（JST）
- */
 export function yyyymmddJST(date = new Date()) {
-  // JSTに寄せる（簡易：UTC+9）
   const utc = date.getTime() + date.getTimezoneOffset() * 60000;
   const jst = new Date(utc + 9 * 60 * 60000);
   const y = jst.getFullYear();
@@ -16,40 +11,26 @@ export function yyyymmddJST(date = new Date()) {
 }
 
 function buildUrl(kind, yyyymmdd) {
-  if (kind === "keirin") {
-    return `${KEIRIN_BASE}/keirin_race_list_${yyyymmdd}.json`;
-  }
+  if (kind === "keirin") return `${KEIRIN_BASE}/keirin_race_list_${yyyymmdd}.json`;
   return `${AUTO_BASE}/autorace_race_list_${yyyymmdd}.json`;
 }
 
 async function fetchJson(url) {
   const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Fetch failed: ${res.status} ${res.statusText} (${url})`);
-  }
+  if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${res.statusText} (${url})`);
   return res.json();
 }
 
 /**
- * 取得した元データを、UI向けに「会場→レース配列」に正規化する
- * 期待する出力:
- * [
- *   { venue: "平塚", races: [{id,no,deadline,start,netkeirinUrl,closed:false}, ...] },
- *   ...
- * ]
- *
- * ※ 元JSONの構造が環境で違う可能性があるので、
- *    できるだけ幅広いキー候補を拾う“ゆるい正規化”にしてあります。
+ * UI用に正規化
+ * 出力: [{ venue, races:[{id,no,deadline,start,netkeirinUrl,notifyAt,closed}]}]
  */
 export function normalizeRaces(kind, raw) {
-  // rawがすでに venueごとの配列ならそれを尊重
   const list = Array.isArray(raw) ? raw : raw?.races || raw?.race_list || [];
 
-  // 「レース1件」を共通形にする
   const toRace = (r, idx, venueName) => {
     const no = r.race_no ?? r.raceNo ?? r.no ?? r.rno ?? idx + 1;
 
-    // 締切時刻候補
     const deadline =
       r.deadline_time ??
       r.shimekiri ??
@@ -59,7 +40,6 @@ export function normalizeRaces(kind, raw) {
       r.deadline ??
       "";
 
-    // 発走時刻候補（なくてもOK）
     const start =
       r.start_time ??
       r.hassou ??
@@ -67,7 +47,6 @@ export function normalizeRaces(kind, raw) {
       r.post_time ??
       "";
 
-    // netkeirin URL候補（競輪のみ想定だが、あれば使う）
     const netkeirinUrl =
       r.netkeirin_url ??
       r.netkeirinUrl ??
@@ -75,7 +54,6 @@ export function normalizeRaces(kind, raw) {
       r.race_url ??
       "";
 
-    // idを安定生成（後でサーバー側race_idに差し替えOK）
     const id = `${kind}-${venueName}-${String(no).padStart(2, "0")}`;
 
     return {
@@ -84,12 +62,11 @@ export function normalizeRaces(kind, raw) {
       deadline,
       start,
       netkeirinUrl,
-      closed: false, // 締切判定はApp側で現在時刻と比較して付与
+      notifyAt: "", // 後で計算
+      closed: false, // 後で計算
     };
   };
 
-  // 1) venue単位の配列形式を想定して変換
-  //    例: [{ venue: "平塚", races:[...] }, ...]
   const looksVenueList =
     list.length > 0 && (list[0]?.venue || list[0]?.place || list[0]?.stadium);
 
@@ -104,8 +81,6 @@ export function normalizeRaces(kind, raw) {
       .filter((v) => v.races.length > 0);
   }
 
-  // 2) フラットな「レースの配列」形式を想定して venueでグルーピング
-  //    例: [{ venue:"平塚", race_no:1, ... }, ...]
   const flat = list;
   const map = new Map();
   for (let i = 0; i < flat.length; i++) {
@@ -121,15 +96,13 @@ export function normalizeRaces(kind, raw) {
   }));
 }
 
-function parseHHMM(hhmm) {
-  // "08:45" を 今日の日付のDate（JST想定）にする
+function parseHHMMToJSTToday(hhmm) {
   if (!hhmm || typeof hhmm !== "string") return null;
   const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return null;
   const h = Number(m[1]);
   const min = Number(m[2]);
 
-  // JST
   const now = new Date();
   const utc = now.getTime() + now.getTimezoneOffset() * 60000;
   const jst = new Date(utc + 9 * 60 * 60000);
@@ -139,27 +112,30 @@ function parseHHMM(hhmm) {
   return d;
 }
 
+function fmtHHMM(dateObj) {
+  const h = String(dateObj.getHours()).padStart(2, "0");
+  const m = String(dateObj.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
 /**
- * 締切を過ぎたら closed=true を付与
+ * 仕様：
+ * - 「締切」は通知の5分前扱い（=通知時刻をUIの締切として扱う）
+ * - 通知時刻（締切-5分）を過ぎたらグレーアウト（closed=true）
  */
-export function markClosed(venues) {
+export function markClosedAndNotifyAt(venues, notifyOffsetMin = 5) {
   const now = new Date();
   return venues.map((v) => ({
     ...v,
     races: v.races.map((r) => {
-      const dl = parseHHMM(r.deadline);
-      const closed = dl ? now.getTime() >= dl.getTime() : false;
-      return { ...r, closed };
-    }),
-  }));
-}
+      const dl = parseHHMMToJSTToday(r.deadline); // ここは JSON 上の締切時刻
+      if (!dl) {
+        return { ...r, notifyAt: "", closed: false };
+      }
+      const notifyAtDate = new Date(dl.getTime() - notifyOffsetMin * 60 * 1000);
+      const notifyAt = fmtHHMM(notifyAtDate);
 
-/**
- * kind: "keirin" | "auto"
- */
-export async function fetchTodayVenues(kind, date = new Date()) {
-  const ymd = yyyymmddJST(date);
-  const url = buildUrl(kind, ymd);
-  const raw = await fetchJson(url);
-  return markClosed(normalizeRaces(kind, raw));
-}
+      const closed = now.getTime() >= notifyAtDate.getTime();
+      return { ...r, notifyAt, closed };
+    }),
+  })

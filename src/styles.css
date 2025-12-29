@@ -1,14 +1,16 @@
 :root{
-  --bg: #f6f7f2;
-  --bar: #dfe7db;
-  --card: #eef1e8;
-  --text: #1f1f1f;
+  --bg: #f6f6f4;
+  --bar: #eef0ee;
+  --card: #ffffff;
+  --text: #121212;
   --muted: #6b6f6a;
-  --line: rgba(0,0,0,0.12);
-  --pill: #ffffff;
-  --pillOn: #d7e6d4;
-  --chip: rgba(0,0,0,0.06);
-  --shadow: 0 8px 22px rgba(0,0,0,0.07);
+  --line: rgba(18,18,18,0.12);
+
+  --accent: #2f6f58;
+  --accentSoft: rgba(47,111,88,0.14);
+
+  --chip: rgba(18,18,18,0.06);
+  --shadow: 0 10px 26px rgba(0,0,0,0.07);
 }
 
 *{ box-sizing:border-box; }
@@ -24,6 +26,7 @@ body{
 .topbar{
   background: var(--bar);
   padding: 14px 14px 10px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
 }
 
 .titleRow{
@@ -34,8 +37,8 @@ body{
 }
 
 .appTitle{
-  font-size: 26px;
-  font-weight: 800;
+  font-size: 28px;
+  font-weight: 900;
   letter-spacing: 0.02em;
 }
 
@@ -46,7 +49,7 @@ body{
   background: transparent;
   font-size: 22px;
   padding: 8px;
-  border-radius: 10px;
+  border-radius: 12px;
   cursor: pointer;
 }
 .iconBtn:hover{ background: rgba(0,0,0,0.06); }
@@ -58,37 +61,39 @@ body{
 }
 
 .dateRow{
-  font-size: 26px;
-  font-weight: 800;
-  margin: 6px 2px 10px;
+  font-size: 30px;
+  font-weight: 900;
+  margin: 10px 2px 14px;
 }
 
 .tabsRow{ margin: 6px 0 10px; }
 
 .pillTabs{
   display:inline-flex;
-  background: var(--pill);
+  background: #fff;
   border: 1px solid var(--line);
   border-radius: 999px;
   overflow:hidden;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.04);
 }
 
 .pill{
   border:0;
   background: transparent;
-  padding: 10px 16px;
+  padding: 12px 18px;
   font-size: 16px;
   cursor:pointer;
   display:flex;
   align-items:center;
   gap:10px;
-  min-width: 120px;
+  min-width: 140px;
   justify-content:center;
 }
 
 .pill.active{
-  background: var(--pillOn);
-  font-weight: 700;
+  background: var(--accentSoft);
+  font-weight: 900;
+  color: var(--accent);
 }
 
 .pillCheck{
@@ -98,14 +103,14 @@ body{
 }
 
 .adBanner{
-  margin: 10px 0 14px;
-  height: 46px;
-  border-radius: 12px;
-  background: rgba(0,0,0,0.04);
+  margin: 12px 0 16px;
+  height: 48px;
+  border-radius: 14px;
+  background: rgba(18,18,18,0.05);
   display:flex;
   align-items:center;
   justify-content:center;
-  color: var(--muted);
+  color: rgba(18,18,18,0.45);
   font-size: 14px;
 }
 
@@ -113,19 +118,18 @@ body{
   display:flex;
   justify-content:space-between;
   align-items:center;
-  padding: 10px 2px 8px;
+  padding: 10px 2px 10px;
   border-bottom: 1px solid var(--line);
 }
 
 .listHeaderLeft{
-  font-weight: 800;
+  font-weight: 900;
   font-size: 18px;
 }
 
 .listHeaderRight{
   display:flex;
   gap: 22px;
-  color: var(--muted);
 }
 
 .textBtn{
@@ -133,16 +137,16 @@ body{
   background: transparent;
   cursor:pointer;
   font-size: 16px;
-  color: #3b6f57;
-  font-weight: 700;
+  color: var(--accent);
+  font-weight: 900;
 }
 .textBtn:hover{ text-decoration: underline; }
 
-.venueList{ margin-top: 12px; display:flex; flex-direction:column; gap: 14px; }
+.venueList{ margin-top: 14px; display:flex; flex-direction:column; gap: 14px; }
 
 .venueCard{
   background: var(--card);
-  border-radius: 18px;
+  border-radius: 20px;
   box-shadow: var(--shadow);
   border: 1px solid rgba(0,0,0,0.06);
   overflow:hidden;
@@ -150,13 +154,13 @@ body{
 
 .venueHeader{
   display:flex;
-  align-items:center;
+  align-items:flex-start;
   justify-content:space-between;
-  padding: 14px 14px 10px;
+  padding: 16px 16px 12px;
 }
 
 .venueTitle{
-  font-size: 26px;
+  font-size: 28px;
   font-weight: 900;
 }
 
@@ -172,8 +176,9 @@ body{
   padding: 10px 14px;
   border-radius: 999px;
   cursor:pointer;
-  font-weight: 700;
+  font-weight: 900;
 }
+.chip:hover{ background: rgba(18,18,18,0.10); }
 
 .chevBtn{
   border:0;
@@ -186,14 +191,14 @@ body{
 .chevBtn:hover{ background: rgba(0,0,0,0.06); }
 
 .venueBody{
-  padding: 0 14px 12px;
+  padding: 0 16px 12px;
 }
 
 .raceRow{
   display:flex;
   justify-content:space-between;
   gap: 10px;
-  padding: 12px 0;
+  padding: 14px 0;
   border-top: 1px solid rgba(0,0,0,0.08);
 }
 .raceRow:first-child{ border-top: 0; }
@@ -205,16 +210,12 @@ body{
   flex-wrap:wrap;
 }
 .raceNo{ font-weight: 900; font-size: 18px; }
-.raceTime{ color: #2f2f2f; font-weight: 700; }
-
-.raceNote{
-  margin-top: 6px;
-  color: rgba(0,0,0,0.35);
-  font-size: 14px;
-}
+.raceTime{ font-weight: 900; }
+.raceTimeSub{ color: rgba(18,18,18,0.55); font-weight: 800; }
 
 .raceRight{ display:flex; align-items:center; }
 
+/* 通知時刻を過ぎたらグレーアウト */
 .raceRow.closed{
   opacity: 0.35;
   pointer-events: none;
@@ -232,7 +233,7 @@ body{
   position:absolute;
   inset:0;
   border-radius:999px;
-  background: rgba(0,0,0,0.14);
+  background: rgba(18,18,18,0.18);
 }
 .switch .thumb{
   position:absolute;
@@ -247,7 +248,7 @@ body{
 }
 
 .switch input:checked ~ .track{
-  background: #6aa68a;
+  background: var(--accent);
 }
 .switch input:checked ~ .thumb{
   transform: translateX(24px);
@@ -266,8 +267,9 @@ body{
   border-radius: 12px;
   padding: 10px 12px;
   cursor:pointer;
-  font-weight: 800;
+  font-weight: 900;
 }
+
 .pageTitle{
   font-size: 22px;
   font-weight: 900;
@@ -281,19 +283,29 @@ body{
 
 .myRow{
   background: var(--card);
-  border-radius: 14px;
+  border-radius: 16px;
   padding: 12px 12px;
   display:flex;
-  align-items:center;
+  align-items:flex-start;
   justify-content:space-between;
   box-shadow: var(--shadow);
   border: 1px solid rgba(0,0,0,0.06);
+  gap: 10px;
 }
+.myRowLeft{ min-width: 0; }
+.myMain{ font-weight: 900; }
+.mySub{
+  margin-top: 6px;
+  font-size: 13px;
+  color: rgba(18,18,18,0.55);
+  word-break: break-all;
+}
+
 .myRowRight{ display:flex; gap: 8px; }
 
 .empty{
   padding: 18px 6px;
-  color: var(--muted);
+  color: rgba(18,18,18,0.55);
 }
 
 .card{
@@ -308,6 +320,7 @@ body{
   font-weight: 900;
   margin-bottom: 10px;
 }
+
 .input, .select{
   width: 100%;
   padding: 12px 12px;
@@ -316,26 +329,27 @@ body{
   background: #fff;
   font-size: 16px;
 }
-.primaryBtn{
-  margin-top: 10px;
-  width: 100%;
-  border:0;
-  background: #2f6f58;
-  color: #fff;
-  padding: 12px 14px;
-  border-radius: 12px;
-  font-weight: 900;
-  cursor:pointer;
-}
+
 .hint{
   margin-top: 8px;
-  color: rgba(0,0,0,0.45);
+  color: rgba(18,18,18,0.55);
   font-size: 13px;
+  line-height: 1.4;
 }
-.row{
+
+.settingRow{
   display:flex;
   align-items:center;
   justify-content:space-between;
-  gap: 10px;
-  margin-top: 10px;
+  gap: 12px;
+  margin-top: 12px;
+}
+.settingLabel{
+  font-weight: 900;
+}
+.settingHelp{
+  font-weight: 700;
+  font-size: 12px;
+  color: rgba(18,18,18,0.55);
+  margin-top: 4px;
 }
