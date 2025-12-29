@@ -545,7 +545,11 @@ export default function App() {
 }
 
 /**
- * Flutter(Material3, green seed)っぽい見た目に寄せる（次チャットで微調整OK）
+ * Flutter(Material3, green seed)っぽい見た目に寄せる（太字を抑える）
+ * 目安：
+ * - タイトル/会場名/選択中チップ：600
+ * - 通常ボタン/ピル/バッジ：500
+ * - 通常テキスト：400
  */
 const styles = {
   page: {
@@ -555,6 +559,7 @@ const styles = {
     color: "#102014",
     fontFamily:
       'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Sans", Arial, sans-serif',
+    fontWeight: 400,
   },
   header: {
     position: "sticky",
@@ -571,7 +576,7 @@ const styles = {
     justifyContent: "space-between",
     gap: 12,
   },
-  title: { fontSize: 18, fontWeight: 900, letterSpacing: 0.2 },
+  title: { fontSize: 18, fontWeight: 600, letterSpacing: 0.2 },
   rightHead: { display: "flex", alignItems: "center", gap: 10 },
   modeSwitch: { display: "flex", gap: 8 },
   subRow: {
@@ -590,7 +595,7 @@ const styles = {
     display: "grid",
     gap: 12,
   },
-  date: { fontWeight: 800 },
+  date: { fontWeight: 500 },
 };
 
 const cssText = `
@@ -606,17 +611,19 @@ const cssText = `
   background: rgba(255,240,240,0.92);
 }
 
+/* チップ：通常は500、選択中だけ600 */
 .chip{
   border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.80);
   padding: 9px 14px;
   border-radius: 999px;
   cursor: pointer;
-  font-weight: 900;
+  font-weight: 500;
 }
 .chipOn{
   border-color: rgba(46,125,50,0.25);
   background: rgba(46,125,50,0.14);
+  font-weight: 600;
 }
 
 .iconBtn{
@@ -626,13 +633,13 @@ const cssText = `
   height: 40px;
   border-radius: 14px;
   cursor: pointer;
-  font-weight: 900;
+  font-weight: 600;
 }
 
 .counts{ display:flex; gap: 8px; }
 .countPill{
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 600;
   padding: 7px 12px;
   border-radius: 999px;
   background: rgba(46,125,50,0.12);
@@ -642,6 +649,7 @@ const cssText = `
   background: rgba(0,0,0,0.05);
   border-color: rgba(0,0,0,0.05);
   color: rgba(0,0,0,0.55);
+  font-weight: 500;
 }
 .countPill.countOn{
   background: rgba(46,125,50,0.18);
@@ -660,12 +668,12 @@ const cssText = `
   display:flex;
   align-items:center;
   gap: 10px;
-  font-weight: 900;
+  font-weight: 600;
   font-size: 18px;
 }
 .grade{
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 500;
   padding: 5px 10px;
   border-radius: 999px;
   background: rgba(46,125,50,0.10);
@@ -676,7 +684,7 @@ const cssText = `
 .venueMeta{ display:flex; gap: 8px; }
 .badge{
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 600;
   padding: 7px 12px;
   border-radius: 999px;
   background: rgba(46,125,50,0.12);
@@ -697,12 +705,13 @@ const cssText = `
   padding: 10px 12px;
   border-radius: 14px;
   cursor: pointer;
-  font-weight: 900;
+  font-weight: 500;
 }
 .btn.ghost{ background: rgba(0,0,0,0.02); }
 .btn.danger{
   border-color: rgba(220,0,0,0.2);
   background: rgba(255,230,230,0.85);
+  font-weight: 600;
 }
 
 .raceList{ display:grid; gap: 10px; padding: 0 6px 6px; }
@@ -723,8 +732,11 @@ const cssText = `
 
 .raceLeft{ min-width: 0; flex: 1; }
 .raceTopLine{ display:flex; align-items:center; gap: 12px; }
-.raceNo{ font-weight: 900; font-size: 18px; }
-.raceTitle{ font-size: 14px; opacity: 0.88; }
+
+/* レース番号だけ少し強く（Flutterのlabel感） */
+.raceNo{ font-weight: 600; font-size: 18px; }
+.raceTitle{ font-size: 14px; opacity: 0.88; font-weight: 400; }
+
 .linkBtn{
   margin-left: auto;
   border: 1px solid rgba(0,0,0,0.10);
@@ -732,7 +744,7 @@ const cssText = `
   padding: 8px 12px;
   border-radius: 999px;
   cursor: pointer;
-  font-weight: 900;
+  font-weight: 600;
   font-size: 12px;
 }
 
@@ -744,7 +756,7 @@ const cssText = `
 }
 .timePill{
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 500;
   padding: 7px 12px;
   border-radius: 999px;
   background: rgba(46,125,50,0.10);
@@ -755,6 +767,7 @@ const cssText = `
   background: rgba(0,0,0,0.05);
   border-color: rgba(0,0,0,0.05);
   color: rgba(0,0,0,0.55);
+  font-weight: 500;
 }
 
 .raceRight{ display:flex; align-items:center; }
@@ -819,7 +832,7 @@ const cssText = `
   border-bottom: 1px solid rgba(0,0,0,0.08);
   background: rgba(232,245,233,0.75);
 }
-.modalTitle{ font-weight: 900; font-size: 14px; }
+.modalTitle{ font-weight: 600; font-size: 14px; }
 .modalBody{ padding: 12px; display:grid; gap: 12px; }
 .modalFoot{ padding: 12px; border-top: 1px solid rgba(0,0,0,0.08); display:flex; justify-content:flex-end; }
 
@@ -829,20 +842,20 @@ const cssText = `
   gap: 10px;
   align-items:center;
 }
-.label{ font-weight: 900; font-size: 12px; opacity: 0.9; }
+.label{ font-weight: 500; font-size: 12px; opacity: 0.9; }
 select, input{
   border: 1px solid rgba(0,0,0,0.12);
   background: rgba(255,255,255,0.92);
   padding: 10px 12px;
   border-radius: 14px;
-  font-weight: 800;
+  font-weight: 400;
   outline: none;
 }
 .switchLine{
   display:flex;
   align-items:center;
   gap: 10px;
-  font-weight: 900;
+  font-weight: 500;
 }
 .switchLine input{
   width: 18px;
@@ -853,7 +866,7 @@ select, input{
   grid-column: 2 / 3;
   width: fit-content;
   font-size: 12px;
-  font-weight: 900;
+  font-weight: 500;
   padding: 7px 12px;
   border-radius: 999px;
   border: 1px solid rgba(0,0,0,0.08);
@@ -861,6 +874,7 @@ select, input{
 .pillOn{
   background: rgba(46,125,50,0.14);
   border-color: rgba(46,125,50,0.18);
+  font-weight: 600;
 }
 .pillOff{
   background: rgba(0,0,0,0.04);
