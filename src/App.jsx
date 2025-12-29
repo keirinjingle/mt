@@ -230,11 +230,8 @@ function NotificationsPage({
     for (const rk of selectedRaceKeys) {
       const r = raceMap.get(rk);
       if (!r) continue;
-      const n1 = settings.notificationsEnabled ? computeNotifyAt(r, settings.timer1MinutesBefore) : null;
-      const n2 =
-        settings.notificationsEnabled && timer2Active
-          ? computeNotifyAt(r, settings.timer2MinutesBefore)
-          : null;
+      const n1 = computeNotifyAt(r, settings.timer1MinutesBefore);
+      const n2 = timer2Active ? computeNotifyAt(r, settings.timer2MinutesBefore) : null;
 
       list.push({
         raceKey: rk,
@@ -605,26 +602,20 @@ export default function App() {
                       OFF
                     </button>
                   </div>
+                </div>
 
                 {isOpen && (
-                  <div className="raceList">
+                                <div className="raceList">
                     {v.races.map((r) => {
                       const closedAt = parseHHMMToday(r.closedAtHHMM);
 
-                      // 通知計算：レーストグルがONなら有効（全体ON/OFFは廃止）
                       const n1 = computeNotifyAt(r, settings.timer1MinutesBefore);
+                      const n2 = timer2Active ? computeNotifyAt(r, settings.timer2MinutesBefore) : null;
 
-                      const n2 = timer2Active
-                       ? computeNotifyAt(r, settings.timer2MinutesBefore)
-                       : null;
-
-                      // 「通知時刻を過ぎたら」薄くする（通知① 기준）
                       const past1 = n1 ? now.getTime() >= n1.getTime() : false;
                       const past2 = n2 ? now.getTime() >= n2.getTime() : false;
 
-                      // 締切を過ぎたらグレーアウト
                       const ended = closedAt ? now.getTime() >= closedAt.getTime() : false;
-
                       const checked = !!toggled[r.raceKey];
 
                       return (
@@ -647,7 +638,6 @@ export default function App() {
                                 通知 <b>{n1 ? toHHMM(n1) : "--:--"}</b>（{settings.timer1MinutesBefore}分前）
                               </span>
 
-                              {/* 2回目：ONのときだけ表示（OFF文言は削除） */}
                               {timer2Active && (
                                 <span className={`timePill ${past2 ? "timePast" : ""}`}>
                                   2回目 <b>{n2 ? toHHMM(n2) : "--:--"}</b>（{settings.timer2MinutesBefore}分前）
@@ -675,6 +665,7 @@ export default function App() {
                   </div>
                 )}
               </section>
+
             );
           })}
       </main>
