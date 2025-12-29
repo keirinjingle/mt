@@ -1,18 +1,341 @@
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, BlinkMacSystemFont,
-    "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
-  background: #fafafa;
-  color: #222;
+:root{
+  --bg: #f6f7f2;
+  --bar: #dfe7db;
+  --card: #eef1e8;
+  --text: #1f1f1f;
+  --muted: #6b6f6a;
+  --line: rgba(0,0,0,0.12);
+  --pill: #ffffff;
+  --pillOn: #d7e6d4;
+  --chip: rgba(0,0,0,0.06);
+  --shadow: 0 8px 22px rgba(0,0,0,0.07);
 }
 
-.app {
-  max-width: 640px;
+*{ box-sizing:border-box; }
+body{
+  margin:0;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Hiragino Kaku Gothic ProN", Meiryo, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app{ min-height:100vh; }
+
+.topbar{
+  background: var(--bar);
+  padding: 14px 14px 10px;
+}
+
+.titleRow{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 12px;
+}
+
+.appTitle{
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.titleRight{ display:flex; gap:10px; }
+
+.iconBtn{
+  border:0;
+  background: transparent;
+  font-size: 22px;
+  padding: 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.iconBtn:hover{ background: rgba(0,0,0,0.06); }
+
+.content{
+  max-width: 760px;
   margin: 0 auto;
-  padding: 12px;
+  padding: 12px 14px 32px;
 }
 
-.header {
-  text-align: center;
-  margin-bottom: 16px;
+.dateRow{
+  font-size: 26px;
+  font-weight: 800;
+  margin: 6px 2px 10px;
+}
+
+.tabsRow{ margin: 6px 0 10px; }
+
+.pillTabs{
+  display:inline-flex;
+  background: var(--pill);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  overflow:hidden;
+}
+
+.pill{
+  border:0;
+  background: transparent;
+  padding: 10px 16px;
+  font-size: 16px;
+  cursor:pointer;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-width: 120px;
+  justify-content:center;
+}
+
+.pill.active{
+  background: var(--pillOn);
+  font-weight: 700;
+}
+
+.pillCheck{
+  width: 18px;
+  display:inline-flex;
+  justify-content:center;
+}
+
+.adBanner{
+  margin: 10px 0 14px;
+  height: 46px;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.04);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.listHeader{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  padding: 10px 2px 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.listHeaderLeft{
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.listHeaderRight{
+  display:flex;
+  gap: 22px;
+  color: var(--muted);
+}
+
+.textBtn{
+  border:0;
+  background: transparent;
+  cursor:pointer;
+  font-size: 16px;
+  color: #3b6f57;
+  font-weight: 700;
+}
+.textBtn:hover{ text-decoration: underline; }
+
+.venueList{ margin-top: 12px; display:flex; flex-direction:column; gap: 14px; }
+
+.venueCard{
+  background: var(--card);
+  border-radius: 18px;
+  box-shadow: var(--shadow);
+  border: 1px solid rgba(0,0,0,0.06);
+  overflow:hidden;
+}
+
+.venueHeader{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding: 14px 14px 10px;
+}
+
+.venueTitle{
+  font-size: 26px;
+  font-weight: 900;
+}
+
+.venueHeaderRight{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+}
+
+.chip{
+  border:0;
+  background: var(--chip);
+  padding: 10px 14px;
+  border-radius: 999px;
+  cursor:pointer;
+  font-weight: 700;
+}
+
+.chevBtn{
+  border:0;
+  background: transparent;
+  cursor:pointer;
+  font-size: 22px;
+  padding: 8px 10px;
+  border-radius: 12px;
+}
+.chevBtn:hover{ background: rgba(0,0,0,0.06); }
+
+.venueBody{
+  padding: 0 14px 12px;
+}
+
+.raceRow{
+  display:flex;
+  justify-content:space-between;
+  gap: 10px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(0,0,0,0.08);
+}
+.raceRow:first-child{ border-top: 0; }
+
+.raceTop{
+  display:flex;
+  gap: 10px;
+  align-items:baseline;
+  flex-wrap:wrap;
+}
+.raceNo{ font-weight: 900; font-size: 18px; }
+.raceTime{ color: #2f2f2f; font-weight: 700; }
+
+.raceNote{
+  margin-top: 6px;
+  color: rgba(0,0,0,0.35);
+  font-size: 14px;
+}
+
+.raceRight{ display:flex; align-items:center; }
+
+.raceRow.closed{
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.switch{
+  position: relative;
+  width: 56px;
+  height: 32px;
+  display:inline-block;
+}
+.switch input{ display:none; }
+
+.switch .track{
+  position:absolute;
+  inset:0;
+  border-radius:999px;
+  background: rgba(0,0,0,0.14);
+}
+.switch .thumb{
+  position:absolute;
+  top: 4px;
+  left: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.25);
+  transition: transform 0.15s ease;
+}
+
+.switch input:checked ~ .track{
+  background: #6aa68a;
+}
+.switch input:checked ~ .thumb{
+  transform: translateX(24px);
+}
+
+.pageHeader{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  margin: 8px 0 14px;
+}
+
+.backBtn{
+  border:0;
+  background: rgba(0,0,0,0.06);
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor:pointer;
+  font-weight: 800;
+}
+.pageTitle{
+  font-size: 22px;
+  font-weight: 900;
+}
+
+.myList, .settings{
+  display:flex;
+  flex-direction:column;
+  gap: 12px;
+}
+
+.myRow{
+  background: var(--card);
+  border-radius: 14px;
+  padding: 12px 12px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  box-shadow: var(--shadow);
+  border: 1px solid rgba(0,0,0,0.06);
+}
+.myRowRight{ display:flex; gap: 8px; }
+
+.empty{
+  padding: 18px 6px;
+  color: var(--muted);
+}
+
+.card{
+  background: var(--card);
+  border-radius: 16px;
+  padding: 14px;
+  box-shadow: var(--shadow);
+  border: 1px solid rgba(0,0,0,0.06);
+}
+.cardTitle{
+  font-size: 16px;
+  font-weight: 900;
+  margin-bottom: 10px;
+}
+.input, .select{
+  width: 100%;
+  padding: 12px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(0,0,0,0.15);
+  background: #fff;
+  font-size: 16px;
+}
+.primaryBtn{
+  margin-top: 10px;
+  width: 100%;
+  border:0;
+  background: #2f6f58;
+  color: #fff;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-weight: 900;
+  cursor:pointer;
+}
+.hint{
+  margin-top: 8px;
+  color: rgba(0,0,0,0.45);
+  font-size: 13px;
+}
+.row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 10px;
+  margin-top: 10px;
 }
