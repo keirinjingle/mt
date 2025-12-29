@@ -58,3 +58,33 @@ h3 {
   margin: 0;
   font-weight: 700;
 }
+
+/* ===== 強制的に太さを落とす（Flutter寄せ） ===== */
+
+body {
+  font-weight: 400 !important;
+}
+
+button,
+input,
+select,
+textarea {
+  font-weight: 400 !important;
+}
+
+/* よく使っているピル・ラベル系 */
+.pill,
+.badge,
+.toggle,
+.toggleLabel,
+.actionButton {
+  font-weight: 400 !important;
+}
+
+/* 会場名・ヘッダータイトル */
+h1,
+h2,
+.headerTitle,
+.venueName {
+  font-weight: 500 !important;
+}
