@@ -11,19 +11,47 @@ export function yyyymmddJST(date = new Date()) {
 }
 
 function buildUrl(kind, yyyymmdd) {
-  if (kind === "keirin") return `${KEIRIN_BASE}/keirin_race_list_${yyyymmdd}.json`;
+  if (kind === "keirin") {
+    return `${KEIRIN_BASE}/keirin_race_list_${yyyymmdd}.json`;
+  }
   return `${AUTO_BASE}/autorace_race_list_${yyyymmdd}.json`;
 }
 
 async function fetchJson(url) {
   const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Fetch failed: ${res.status} ${res.statusText} (${url})`);
+  if (!res.ok) {
+    throw new Error(`Fetch failed: ${res.status} ${res.statusText} (${url})`);
+  }
   return res.json();
 }
 
+// "08:45" -> 今日の JST Date
+function parseHHMMToJSTToday(hhmm) {
+  if (!hhmm || typeof hhmm !== "string") return null;
+  const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+
+  const now = new Date();
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const jst = new Date(utc + 9 * 60 * 60000);
+
+  const d = new Date(jst);
+  d.setHours(h, min, 0, 0);
+  return d;
+}
+
+function fmtHHMM(dateObj) {
+  const h = String(dateObj.getHours()).padStart(2, "0");
+  const m = String(dateObj.getMinutes()).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
 /**
- * UI用に正規化
- * 出力: [{ venue, races:[{id,no,deadline,start,netkeirinUrl,notifyAt,closed}]}]
+ * 正規化
+ * 出力: [{ venue: string, races: [{id,no,deadline,start,netkeirinUrl,notifyAt,closed}] }]
  */
 export function normalizeRaces(kind, raw) {
   const list = Array.isArray(raw) ? raw : raw?.races || raw?.race_list || [];
@@ -62,8 +90,8 @@ export function normalizeRaces(kind, raw) {
       deadline,
       start,
       netkeirinUrl,
-      notifyAt: "", // 後で計算
-      closed: false, // 後で計算
+      notifyAt: "",
+      closed: false,
     };
   };
 
@@ -81,10 +109,10 @@ export function normalizeRaces(kind, raw) {
       .filter((v) => v.races.length > 0);
   }
 
-  const flat = list;
+  // フラット形式 -> venueでグルーピング
   const map = new Map();
-  for (let i = 0; i < flat.length; i++) {
-    const r = flat[i];
+  for (let i = 0; i < list.length; i++) {
+    const r = list[i];
     const venueName = r.venue ?? r.place ?? r.stadium ?? r.kaisai ?? "不明";
     if (!map.has(venueName)) map.set(venueName, []);
     map.get(venueName).push(r);
@@ -96,46 +124,33 @@ export function normalizeRaces(kind, raw) {
   }));
 }
 
-function parseHHMMToJSTToday(hhmm) {
-  if (!hhmm || typeof hhmm !== "string") return null;
-  const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-
-  const now = new Date();
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const jst = new Date(utc + 9 * 60 * 60000);
-
-  const d = new Date(jst);
-  d.setHours(h, min, 0, 0);
-  return d;
-}
-
-function fmtHHMM(dateObj) {
-  const h = String(dateObj.getHours()).padStart(2, "0");
-  const m = String(dateObj.getMinutes()).padStart(2, "0");
-  return `${h}:${m}`;
-}
-
 /**
- * 仕様：
- * - 「締切」は通知の5分前扱い（=通知時刻をUIの締切として扱う）
- * - 通知時刻（締切-5分）を過ぎたらグレーアウト（closed=true）
+ * 仕様:
+ * - 通知時刻 = (JSONの締切 - 5分)
+ * - 通知時刻を過ぎたら closed=true（グレーアウト）
  */
 export function markClosedAndNotifyAt(venues, notifyOffsetMin = 5) {
   const now = new Date();
+
   return venues.map((v) => ({
     ...v,
     races: v.races.map((r) => {
-      const dl = parseHHMMToJSTToday(r.deadline); // ここは JSON 上の締切時刻
-      if (!dl) {
-        return { ...r, notifyAt: "", closed: false };
-      }
+      const dl = parseHHMMToJSTToday(r.deadline);
+      if (!dl) return { ...r, notifyAt: "", closed: false };
+
       const notifyAtDate = new Date(dl.getTime() - notifyOffsetMin * 60 * 1000);
       const notifyAt = fmtHHMM(notifyAtDate);
-
       const closed = now.getTime() >= notifyAtDate.getTime();
+
       return { ...r, notifyAt, closed };
     }),
-  })
+  }));
+}
+
+export async function fetchTodayVenues(kind, date = new Date()) {
+  const ymd = yyyymmddJST(date);
+  const url = buildUrl(kind, ymd);
+  const raw = await fetchJson(url);
+  const normalized = normalizeRaces(kind, raw);
+  return markClosedAndNotifyAt(normalized, 5);
+}
