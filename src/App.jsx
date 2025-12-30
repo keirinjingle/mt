@@ -140,8 +140,13 @@ async function fetchRacesJson(mode) {
  * ]
  */
 function normalizeToVenues(raw, mode) {
-  if (Array.isArray(raw) && raw.length > 0 && raw[0] && Array.isArray(raw[0].races)) {
-    return raw.map((v) => {
+  const list =
+  Array.isArray(raw) ? raw :
+  (raw && (raw.venues || raw.data || raw.items)) ? (raw.venues || raw.data || raw.items) :
+  [];
+
+  if (Array.isArray(list) && list.length > 0 && list[0] && Array.isArray(list[0].races)) {
+    return list.map((v) => {
       const venueName = v.venue || v.venueName || v.name || "会場";
       const venueKey = `${mode}_${venueName}`;
       const races = (v.races || []).map((r, ri) =>
