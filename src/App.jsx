@@ -488,7 +488,7 @@ export default function App() {
         verified: true,
         pro: false,
         ...defaultsFromProFlag(false),
-        message: "API未設定のためFREE扱い",
+        message: "無料版",
       }));
       return;
     }
@@ -788,7 +788,7 @@ export default function App() {
             selectedCount={selectedCount}
             setToggled={setToggled}
             fcmToken={fcmToken}
-            handleToggleNotifications={handleToggleNotifications} // ★これを追加
+            handleToggleNotifications={handleToggleNotifications} // ★これ必須
           />
         )}
       </div>
@@ -943,9 +943,20 @@ function SettingsModal({
   selectedCount,
   setToggled,
   fcmToken,
-  handleToggleNotifications,
+  handleToggleNotifications, // 親から渡す（関数）
 }) {
   const canUseTimer2 = isPro && timer2Allowed;
+
+  // ★ここが重要：関数じゃなくても落ちないようにする
+  const togglePush = async (checked) => {
+    if (typeof handleToggleNotifications === "function") {
+      await handleToggleNotifications(checked);
+    } else {
+      // 親が渡してない / 変な値でもクラッシュしない
+      setSettings((p) => ({ ...p, notificationsEnabled: checked }));
+      console.warn("[SettingsModal] handleToggleNotifications is not a function:", handleToggleNotifications);
+    }
+  };
 
   return (
     <div className="modalBack" onClick={onClose}>
@@ -968,7 +979,7 @@ function SettingsModal({
                   <input
                     type="checkbox"
                     checked={!!settings.notificationsEnabled}
-                    onChange={(e) => handleToggleNotifications(e.target.checked)}
+                    onChange={(e) => togglePush(e.target.checked)}
                   />
                   <span className="switchUi" />
                 </div>
@@ -978,12 +989,7 @@ function SettingsModal({
 
               <div className="note">
                 ※ONにすると許可ダイアログが出るので必ず許可してください。なお
-                <a
-                  className="link"
-                  href="https://mt.qui2.net/attention.html"
-                  target="_blank"
-                  rel="noreferrer"
-                >
+                <a className="link" href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
                   iPhoneはホーム画面追加しないと通知できません
                 </a>
                 。
@@ -991,16 +997,13 @@ function SettingsModal({
             </div>
           </div>
 
-          {/* 1つ目タイマー（旧：通知①（分前）） */}
+          {/* 1つ目タイマー */}
           <div className="row">
             <div className="label">1つ目タイマー</div>
-
             <div className="fieldBox">
               <select
                 value={settings.timer1MinutesBefore}
-                onChange={(e) =>
-                  setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))
-                }
+                onChange={(e) => setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))}
               >
                 {[5, 4, 3, 2, 1].map((m) => (
                   <option key={m} value={m}>
@@ -1011,15 +1014,12 @@ function SettingsModal({
             </div>
           </div>
 
-          {/* 2つ目タイマー（スイッチ化 + PRO案内を通常フォントで） */}
+          {/* 2つ目タイマー */}
           <div className="row">
             <div className="label">2つ目タイマー</div>
 
             <div className="fieldBox">
-              <label
-                className="switchLine"
-                style={{ justifyContent: "space-between", opacity: canUseTimer2 ? 1 : 0.55 }}
-              >
+              <label className="switchLine" style={{ justifyContent: "space-between", opacity: canUseTimer2 ? 1 : 0.55 }}>
                 <div className="switchWrap" aria-label="timer2-switch">
                   <input
                     type="checkbox"
@@ -1037,17 +1037,14 @@ function SettingsModal({
             </div>
           </div>
 
-          {/* 通知②（分前） */}
+          {/* 2回目（分前） */}
           <div className="row">
             <div className="label">2回目（分前）</div>
-
             <div className="fieldBox">
               <select
                 value={settings.timer2MinutesBefore}
                 disabled={!canUseTimer2 || !settings.timer2Enabled}
-                onChange={(e) =>
-                  setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))
-                }
+                onChange={(e) => setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))}
               >
                 {[5, 4, 3, 2, 1].map((m) => (
                   <option key={m} value={m}>
@@ -1062,10 +1059,7 @@ function SettingsModal({
           <div className="row">
             <div className="label">通知タップ先</div>
             <div className="fieldBox">
-              <select
-                value={settings.linkTarget}
-                onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}
-              >
+              <select value={settings.linkTarget} onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}>
                 <option value="json">ネット競輪（レース情報）</option>
                 <option value="oddspark">オッズパーク</option>
                 <option value="chariloto">チャリロト</option>
@@ -1075,26 +1069,17 @@ function SettingsModal({
             </div>
           </div>
 
-          {/* 有料コード（期間文を追加） */}
+          {/* 有料コード */}
           <div className="row">
             <div className="label">有料コード</div>
-
             <div className="fieldBox">
               <input
                 value={settings.proCode || ""}
                 onChange={(e) => setSettings((p) => ({ ...p, proCode: e.target.value }))}
                 placeholder="コードを入力"
               />
-
-              <div className="note">
-                期間：登録日から月末まで（20日を過ぎてからの登録は翌々月の月末まで）
-              </div>
-
-              {proState?.verified && proState?.message ? (
-                <div className="note" style={{ opacity: 0.85 }}>
-                  {proState.message}
-                </div>
-              ) : null}
+              <div className="note">期間：登録日から月末まで（20日を過ぎてからの登録は翌々月の月末まで）</div>
+              {proState?.verified && proState?.message ? <div className="note" style={{ opacity: 0.85 }}>{proState.message}</div> : null}
             </div>
           </div>
 
@@ -1112,14 +1097,12 @@ function SettingsModal({
           <div className="row">
             <div className="label">選択のリセット</div>
             <div className="fieldBox">
-              <button className="btn danger" onClick={() => setToggled({})}>
-                すべて解除
-              </button>
+              <button className="btn danger" onClick={() => setToggled({})}>すべて解除</button>
               <div className="note">現在の通知数：{selectedCount}</div>
             </div>
           </div>
 
-          {/* デバッグ表示（必要なら後で消す） */}
+          {/* debug */}
           {fcmToken ? (
             <div className="row">
               <div className="label">FCM token（debug）</div>
@@ -1131,12 +1114,9 @@ function SettingsModal({
         </div>
 
         <div className="modalFoot">
-          <button className="btn" onClick={onClose}>
-            閉じる
-          </button>
+          <button className="btn" onClick={onClose}>閉じる</button>
         </div>
 
-        {/* SettingsModal専用の最小CSS（既存CSSに追加してOK） */}
         <style>{`
           .fieldBox{ grid-column: 2 / 3; display: grid; gap: 8px; }
           .note{ font-size: 12px; opacity: .75; line-height: 1.45; }
@@ -1187,6 +1167,7 @@ function SettingsModal({
     </div>
   );
 }
+
 
 
 /* ===== style ===== */
