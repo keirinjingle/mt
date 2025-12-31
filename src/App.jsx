@@ -335,6 +335,31 @@ export default function App() {
     ensureAnonUserId();
   }, []);
 
+  async function handleToggleNotifications(nextOn) {
+  // UI状態を先に更新
+  setSettings((p) => ({ ...p, notificationsEnabled: nextOn }));
+
+  if (!nextOn) {
+    // まずはOFFにするだけ（購読解除やtoken破棄は後でOK）
+    setFcmToken("");
+    return;
+  }
+
+  try {
+    const token = await ensurePushSubscribed();
+    if (!token) {
+      // permission denied等
+      setSettings((p) => ({ ...p, notificationsEnabled: false }));
+      return;
+    }
+    setFcmToken(token);
+  } catch (e) {
+    console.error("[Push subscribe error]", e);
+    setSettings((p) => ({ ...p, notificationsEnabled: false }));
+    alert(`Push購読に失敗しました: ${String(e?.message || e)}`);
+  }
+}
+
   /* route */
   const [route, setRoute] = useState(getRouteFromHash());
   useEffect(() => {
@@ -763,6 +788,7 @@ export default function App() {
             selectedCount={selectedCount}
             setToggled={setToggled}
             fcmToken={fcmToken}
+            handleToggleNotifications={handleToggleNotifications} // ★これを追加
           />
         )}
       </div>
@@ -917,6 +943,7 @@ function SettingsModal({
   selectedCount,
   setToggled,
   fcmToken,
+  handleToggleNotifications,
 }) {
   const canUseTimer2 = isPro && timer2Allowed;
 
@@ -931,114 +958,174 @@ function SettingsModal({
         </div>
 
         <div className="modalBody">
+          {/* Push通知 */}
           <div className="row">
-  <div className="label">Push通知</div>
+            <div className="label">Push通知</div>
 
-  <label className="switchLine">
-    <input
-      type="checkbox"
-      checked={!!settings.notificationsEnabled}
-      onChange={(e) => handleToggleNotifications(e.target.checked)}
-    />
-    <span>{settings.notificationsEnabled ? "ON" : "OFF"}</span>
-  </label>
+            <div className="fieldBox">
+              <label className="switchLine" style={{ justifyContent: "space-between" }}>
+                <div className="switchWrap" aria-label="push-switch">
+                  <input
+                    type="checkbox"
+                    checked={!!settings.notificationsEnabled}
+                    onChange={(e) => handleToggleNotifications(e.target.checked)}
+                  />
+                  <span className="switchUi" />
+                </div>
 
-  <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.4 }}>
-    ※ONにすると許可ダイアログが出ます（iPhoneはホーム画面追加推奨）
-  </div>
-</div>
+                <span className="switchText">{settings.notificationsEnabled ? "ON" : "OFF"}</span>
+              </label>
 
-          <div className="row">
-            <div className="label">通知①（分前）</div>
-            <select
-              value={settings.timer1MinutesBefore}
-              onChange={(e) => setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))}
-            >
-              {MINUTE_OPTIONS.map((m) => (
-                <option key={m} value={m}>
-                  {m} 分前
-                </option>
-              ))}
-            </select>
+              <div className="note">
+                ※ONにすると許可ダイアログが出るので必ず許可してください。なお
+                <a
+                  className="link"
+                  href="https://mt.qui2.net/attention.html"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  iPhoneはホーム画面追加しないと通知できません
+                </a>
+                。
+              </div>
+            </div>
           </div>
 
+          {/* 1つ目タイマー（旧：通知①（分前）） */}
+          <div className="row">
+            <div className="label">1つ目タイマー</div>
+
+            <div className="fieldBox">
+              <select
+                value={settings.timer1MinutesBefore}
+                onChange={(e) =>
+                  setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))
+                }
+              >
+                {[5, 4, 3, 2, 1].map((m) => (
+                  <option key={m} value={m}>
+                    {m} 分前
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* 2つ目タイマー（スイッチ化 + PRO案内を通常フォントで） */}
           <div className="row">
             <div className="label">2つ目タイマー</div>
-            <label className="switchLine" title={!canUseTimer2 ? "" : ""}>
-              <input
-                type="checkbox"
-                checked={!!settings.timer2Enabled}
-                onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
-                disabled={!canUseTimer2}
-              />
-              <span>{canUseTimer2 ? "ON/OFF" : "PROで解放"}</span>
-            </label>
+
+            <div className="fieldBox">
+              <label
+                className="switchLine"
+                style={{ justifyContent: "space-between", opacity: canUseTimer2 ? 1 : 0.55 }}
+              >
+                <div className="switchWrap" aria-label="timer2-switch">
+                  <input
+                    type="checkbox"
+                    checked={!!settings.timer2Enabled}
+                    onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
+                    disabled={!canUseTimer2}
+                  />
+                  <span className="switchUi" />
+                </div>
+
+                <span className="switchText">{settings.timer2Enabled ? "ON" : "OFF"}</span>
+              </label>
+
+              {!canUseTimer2 && <div className="note">PRO版で解放</div>}
+            </div>
           </div>
 
+          {/* 通知②（分前） */}
           <div className="row">
-            <div className="label">通知②（分前）</div>
-            <select
-              value={settings.timer2MinutesBefore}
-              disabled={!canUseTimer2 || !settings.timer2Enabled}
-              onChange={(e) => setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))}
-            >
-              {MINUTE_OPTIONS.map((m) => (
-                <option key={m} value={m}>
-                  {m} 分前
-                </option>
-              ))}
-            </select>
+            <div className="label">2回目（分前）</div>
+
+            <div className="fieldBox">
+              <select
+                value={settings.timer2MinutesBefore}
+                disabled={!canUseTimer2 || !settings.timer2Enabled}
+                onChange={(e) =>
+                  setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))
+                }
+              >
+                {[5, 4, 3, 2, 1].map((m) => (
+                  <option key={m} value={m}>
+                    {m} 分前
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
 
+          {/* 通知タップ先 */}
           <div className="row">
             <div className="label">通知タップ先</div>
-            <select
-              value={settings.linkTarget}
-              onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}
-            >
-              {LINK_TARGETS.map((t) => (
-                <option key={t.key} value={t.key}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
+            <div className="fieldBox">
+              <select
+                value={settings.linkTarget}
+                onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}
+              >
+                <option value="json">ネット競輪（レース情報）</option>
+                <option value="oddspark">オッズパーク</option>
+                <option value="chariloto">チャリロト</option>
+                <option value="winticket">WINTICKET</option>
+                <option value="dmm">DMM競輪</option>
+              </select>
+            </div>
           </div>
 
+          {/* 有料コード（期間文を追加） */}
           <div className="row">
             <div className="label">有料コード</div>
-            <input
-              value={settings.proCode || ""}
-              onChange={(e) => setSettings((p) => ({ ...p, proCode: e.target.value }))}
-              placeholder="コードを入力"
-            />
-            <div className={`pill ${isPro ? "pillOn" : "pillOff"}`}>
-              {proState.loading ? "検証中…" : isPro ? "PRO：広告OFF / 2回目可 / 上限UP" : "FREE：広告ON / 上限あり"}
+
+            <div className="fieldBox">
+              <input
+                value={settings.proCode || ""}
+                onChange={(e) => setSettings((p) => ({ ...p, proCode: e.target.value }))}
+                placeholder="コードを入力"
+              />
+
+              <div className="note">
+                期間：登録日から月末まで（20日を過ぎてからの登録は翌々月の月末まで）
+              </div>
+
+              {proState?.verified && proState?.message ? (
+                <div className="note" style={{ opacity: 0.85 }}>
+                  {proState.message}
+                </div>
+              ) : null}
             </div>
-            {proState.verified && proState.message ? (
-              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>{proState.message}</div>
-            ) : null}
           </div>
 
+          {/* 通知上限 */}
           <div className="row">
             <div className="label">通知上限</div>
-            <div style={{ fontSize: 13, opacity: 0.9 }}>
-              現在：{selectedCount} 件 / 上限：{maxNotifications} 件
+            <div className="fieldBox">
+              <div style={{ fontSize: 14, opacity: 0.9 }}>
+                現在：{selectedCount} 件 / 上限：{maxNotifications} 件
+              </div>
             </div>
           </div>
 
+          {/* 選択のリセット */}
           <div className="row">
             <div className="label">選択のリセット</div>
-            <button className="btn danger" onClick={() => setToggled({})}>
-              すべて解除
-            </button>
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>現在の通知数：{selectedCount}</div>
+            <div className="fieldBox">
+              <button className="btn danger" onClick={() => setToggled({})}>
+                すべて解除
+              </button>
+              <div className="note">現在の通知数：{selectedCount}</div>
+            </div>
           </div>
 
-          {/* デバッグ（必要なら後で消す） */}
+          {/* デバッグ表示（必要なら後で消す） */}
           {fcmToken ? (
             <div className="row">
               <div className="label">FCM token（debug）</div>
-              <div style={{ fontSize: 12, wordBreak: "break-all", opacity: 0.9 }}>{fcmToken}</div>
+              <div className="fieldBox">
+                <div style={{ fontSize: 12, wordBreak: "break-all", opacity: 0.9 }}>{fcmToken}</div>
+              </div>
             </div>
           ) : null}
         </div>
@@ -1048,10 +1135,59 @@ function SettingsModal({
             閉じる
           </button>
         </div>
+
+        {/* SettingsModal専用の最小CSS（既存CSSに追加してOK） */}
+        <style>{`
+          .fieldBox{ grid-column: 2 / 3; display: grid; gap: 8px; }
+          .note{ font-size: 12px; opacity: .75; line-height: 1.45; }
+          .link{ color: inherit; text-decoration: underline; text-underline-offset: 3px; }
+
+          .switchWrap{ position: relative; width: 54px; height: 30px; }
+          .switchWrap input{
+            position:absolute; inset:0;
+            width:100%; height:100%;
+            opacity:0; margin:0;
+            cursor:pointer;
+            z-index:2;
+          }
+          .switchUi{
+            position:absolute; inset:0;
+            border-radius:999px;
+            background: rgba(0,0,0,0.16);
+            border: 1px solid rgba(0,0,0,0.10);
+            transition: .15s;
+          }
+          .switchUi:before{
+            content:"";
+            position:absolute;
+            width: 22px; height: 22px;
+            border-radius:50%;
+            top: 3px; left: 3px;
+            background:#fff;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.16);
+            transition: .15s;
+          }
+          .switchWrap input:checked + .switchUi{
+            background: rgba(46,125,50,0.55);
+            border-color: rgba(46,125,50,0.25);
+          }
+          .switchWrap input:checked + .switchUi:before{
+            transform: translateX(24px);
+          }
+          .switchText{ font-weight: 600; opacity: .9; }
+
+          .switchLine{
+            display:flex;
+            align-items:center;
+            gap: 10px;
+            user-select:none;
+          }
+        `}</style>
       </div>
     </div>
   );
 }
+
 
 /* ===== style ===== */
 const styles = {
@@ -1497,5 +1633,71 @@ input{ width: 100%; }
   .row{ grid-template-columns: 1fr; }
   .venueName{ max-width: 58vw; }
 }
+
+/* 設定：右側カラムの入れ物 */
+.pushBox{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  width:100%;
+}
+
+/* スイッチ（モーダル用） */
+.switchLine{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  user-select:none;
+}
+.switchLine input{ display:none; }
+
+.switchUi{
+  width: 56px;
+  height: 32px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.16);
+  border: 1px solid rgba(0,0,0,0.10);
+  position: relative;
+  transition: .15s;
+  flex: 0 0 auto;
+}
+.switchUi:before{
+  content:"";
+  position:absolute;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  top: 2px;
+  left: 2px;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.16);
+  transition: .15s;
+}
+
+.switchLine input:checked + .switchUi{
+  background: rgba(46,125,50,0.55);
+  border-color: rgba(46,125,50,0.25);
+}
+.switchLine input:checked + .switchUi:before{
+  transform: translateX(24px);
+}
+
+.switchText{
+  font-weight:600;
+  opacity:0.9;
+}
+
+/* 注意書き */
+.note{
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 0.85;
+}
+
+.note .link{
+  text-decoration: underline;
+}
+
+
 `;
 
