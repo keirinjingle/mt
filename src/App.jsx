@@ -692,15 +692,7 @@ export default function App() {
           </div>
 
           <div style={styles.rightHead}>
-            <label className="miniSwitch" title="通知（Push）をON/OFF">
-              <span className="miniLabel">通知</span>
-              <input
-                type="checkbox"
-                checked={!!settings.notificationsEnabled}
-                onChange={(e) => handleToggleNotifications(e.target.checked)}
-              />
-              <span className="miniSlider" />
-            </label>
+
 
             <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">
               ⚙︎
@@ -939,6 +931,23 @@ function SettingsModal({
         </div>
 
         <div className="modalBody">
+          <div className="row">
+  <div className="label">Push通知</div>
+
+  <label className="switchLine">
+    <input
+      type="checkbox"
+      checked={!!settings.notificationsEnabled}
+      onChange={(e) => handleToggleNotifications(e.target.checked)}
+    />
+    <span>{settings.notificationsEnabled ? "ON" : "OFF"}</span>
+  </label>
+
+  <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.4 }}>
+    ※ONにすると許可ダイアログが出ます（iPhoneはホーム画面追加推奨）
+  </div>
+</div>
+
           <div className="row">
             <div className="label">通知①（分前）</div>
             <select
