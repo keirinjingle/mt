@@ -955,7 +955,7 @@ function SettingsModal({
 
           <div className="row">
             <div className="label">2つ目タイマー</div>
-            <label className="switchLine" title={!canUseTimer2 ? "PROで解放（サーバー判定）" : ""}>
+            <label className="switchLine" title={!canUseTimer2 ? "" : ""}>
               <input
                 type="checkbox"
                 checked={!!settings.timer2Enabled}
@@ -996,11 +996,11 @@ function SettingsModal({
           </div>
 
           <div className="row">
-            <div className="label">有料コード（API検証）</div>
+            <div className="label">有料コード</div>
             <input
               value={settings.proCode || ""}
               onChange={(e) => setSettings((p) => ({ ...p, proCode: e.target.value }))}
-              placeholder="コードを入力（サーバーで検証）"
+              placeholder="コードを入力"
             />
             <div className={`pill ${isPro ? "pillOn" : "pillOff"}`}>
               {proState.loading ? "検証中…" : isPro ? "PRO：広告OFF / 2回目可 / 上限UP" : "FREE：広告ON / 上限あり"}
@@ -1048,7 +1048,7 @@ function SettingsModal({
 const styles = {
   page: {
     minHeight: "100vh",
-    background: "#ffffff",
+    background: "#F6F7F3", // ほんのりアイボリー
     color: "#111",
     fontFamily:
       'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Sans", Arial, sans-serif',
@@ -1060,8 +1060,8 @@ const styles = {
     top: 0,
     zIndex: 5,
     backdropFilter: "blur(10px)",
-    background: "rgba(255,255,255,0.92)",
-    borderBottom: "1px solid rgba(0,0,0,0.08)",
+    background: "rgba(246,247,243,0.90)", // page背景に合わせる
+    borderBottom: "1px solid rgba(0,0,0,0.06)",
     padding: "12px 12px 10px",
   },
 
@@ -1073,10 +1073,11 @@ const styles = {
   },
 
   titleRow: { display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 },
-  title: { fontSize: 18, fontWeight: 800, letterSpacing: 0.2, whiteSpace: "nowrap" },
-  dateInline: { fontSize: 12, fontWeight: 600, opacity: 0.75, whiteSpace: "nowrap" },
+  title: { fontSize: 18, fontWeight: 900, letterSpacing: 0.2, whiteSpace: "nowrap" },
+  dateInline: { fontSize: 12, fontWeight: 700, opacity: 0.7, whiteSpace: "nowrap" },
 
-  rightHead: { display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" },
+  // ヘッダー右は「設定」「一覧」だけ置く想定（通知は設定へ）
+  rightHead: { display: "flex", alignItems: "center", gap: 10, flexWrap: "nowrap" },
 
   modeRow: { marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 },
   modeSwitch: { display: "flex", gap: 8, flexWrap: "wrap" },
@@ -1091,12 +1092,26 @@ const styles = {
 };
 
 const cssText = `
+/* --- theme tokens --- */
+:root{
+  --bg: #F6F7F3;
+  --card: #FFFFFF;
+  --ink: #111111;
+
+  /* ネイティブ寄りの緑（トグルONなど） */
+  --accent: #2E6F3E;      /* 深緑 */
+  --accent2: #E6F1E7;     /* 薄緑 */
+  --border: rgba(0,0,0,0.08);
+  --shadow: 0 10px 22px rgba(0,0,0,0.06);
+}
+
 /* --- base --- */
 *{ box-sizing: border-box; }
+html, body{ background: var(--bg); }
 button, input, select{ font: inherit; }
 select, input{
-  border: 1px solid rgba(0,0,0,0.14);
-  border-radius: 12px;
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 14px;
   padding: 10px 12px;
   background: #fff;
 }
@@ -1104,10 +1119,10 @@ select{ cursor:pointer; }
 input{ width: 100%; }
 
 .card{
-  background: #fff;
-  border: 1px solid rgba(0,0,0,0.10);      /* ← せこい灰色 */
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: 18px;
-  box-shadow: 0 10px 22px rgba(0,0,0,0.06);
+  box-shadow: var(--shadow);
   padding: 12px;
 }
 .card.error{
@@ -1117,28 +1132,28 @@ input{ width: 100%; }
 
 /* --- chips --- */
 .chip{
-  border: 1px solid rgba(0,0,0,0.12);
+  border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.95);
   padding: 10px 14px;
   border-radius: 999px;
   cursor: pointer;
-  font-weight: 700;
-  white-space: nowrap; /* 縦割れ防止 */
+  font-weight: 900;
+  white-space: nowrap;
 }
 .chipOn{
-  border-color: rgba(0,0,0,0.18);
-  background: rgba(0,0,0,0.06);
+  border-color: rgba(46,111,62,0.28);
+  background: var(--accent2);
 }
 
 /* --- icon buttons --- */
 .iconBtn{
-  border: 1px solid rgba(0,0,0,0.12);
+  border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.95);
   width: 48px;
   height: 48px;
   border-radius: 16px;
   cursor: pointer;
-  font-weight: 800;
+  font-weight: 900;
   font-size: 20px;
   line-height: 1;
   display: inline-flex;
@@ -1148,36 +1163,36 @@ input{ width: 100%; }
 
 /* --- buttons --- */
 .btn{
-  border: 1px solid rgba(0,0,0,0.14);
+  border: 1px solid rgba(0,0,0,0.12);
   background: #fff;
   padding: 10px 14px;
   border-radius: 14px;
   cursor: pointer;
-  font-weight: 800;
+  font-weight: 900;
 }
 .btn.danger{
   border-color: rgba(220,0,0,0.22);
   background: rgba(255,240,240,0.9);
 }
 .linkBtn{
-  border: 1px solid rgba(0,0,0,0.14);
-  background: rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.12);
+  background: rgba(0,0,0,0.03);
   padding: 8px 12px;
   border-radius: 999px;
   cursor: pointer;
-  font-weight: 800;
+  font-weight: 900;
   white-space: nowrap;
 }
 
 /* --- ad --- */
 .adBar{
-  border: 1px dashed rgba(0,0,0,0.18);
-  background: rgba(0,0,0,0.03);
+  border: 1px dashed rgba(0,0,0,0.14);
+  background: rgba(0,0,0,0.02);
   border-radius: 16px;
   padding: 10px 12px;
 }
 .adText{ font-weight: 900; }
-.adSub{ font-size: 12px; opacity: 0.8; margin-top: 2px; }
+.adSub{ font-size: 12px; opacity: 0.75; margin-top: 2px; }
 
 /* --- mini switch (push on/off) --- */
 .miniSwitch{
@@ -1192,14 +1207,14 @@ input{ width: 100%; }
 .miniLabel{
   font-weight: 900;
   opacity: 0.9;
-  white-space: nowrap; /* 通↵知 防止 */
+  white-space: nowrap;
 }
 .miniSlider{
   width: 44px;
   height: 26px;
   border-radius: 999px;
   background: rgba(0,0,0,0.18);
-  border: 1px solid rgba(0,0,0,0.12);
+  border: 1px solid rgba(0,0,0,0.10);
   position: relative;
   transition: .15s;
 }
@@ -1216,7 +1231,8 @@ input{ width: 100%; }
   transition: .15s;
 }
 .miniSwitch input:checked + .miniSlider{
-  background: rgba(0,0,0,0.55);
+  background: var(--accent);
+  border-color: rgba(46,111,62,0.30);
 }
 .miniSwitch input:checked + .miniSlider:before{
   transform: translateX(18px);
@@ -1232,7 +1248,7 @@ input{ width: 100%; }
 }
 .tinyCount{
   font-size: 12px;
-  opacity: 0.75;
+  opacity: 0.7;
   white-space: nowrap;
 }
 
@@ -1243,16 +1259,17 @@ input{ width: 100%; }
   justify-content:center;
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(0,0,0,0.14);
+  border: 1px solid rgba(0,0,0,0.12);
   font-weight: 900;
   font-size: 12px;
   white-space: nowrap;
 }
 .pillOn{
-  background: rgba(0,0,0,0.06);
+  background: var(--accent2);
+  border-color: rgba(46,111,62,0.25);
 }
 .pillOff{
-  background: rgba(0,0,0,0.03);
+  background: rgba(0,0,0,0.02);
   opacity: 0.9;
 }
 
@@ -1280,22 +1297,22 @@ input{ width: 100%; }
 .chev{ opacity: 0.7; }
 .grade{
   font-size: 12px;
-  border: 1px solid rgba(0,0,0,0.14);
+  border: 1px solid rgba(0,0,0,0.12);
   border-radius: 999px;
   padding: 4px 8px;
-  opacity: 0.85;
+  opacity: 0.8;
   white-space: nowrap;
 }
 .venueActions{ display:flex; gap: 8px; flex: 0 0 auto; }
 .smallBtn{
-  border: 1px solid rgba(0,0,0,0.14);
+  border: 1px solid rgba(0,0,0,0.12);
   background: #fff;
   padding: 8px 10px;
   border-radius: 12px;
   cursor:pointer;
   font-weight: 900;
 }
-.smallBtn.on{ background: rgba(0,0,0,0.04); }
+.smallBtn.on{ background: var(--accent2); border-color: rgba(46,111,62,0.25); }
 .smallBtn.off{ background: rgba(0,0,0,0.02); }
 
 /* --- races --- */
@@ -1304,13 +1321,14 @@ input{ width: 100%; }
   display:flex;
   gap: 10px;
   align-items: stretch;
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(0,0,0,0.02);
+  border: 1px solid rgba(0,0,0,0.08);
+  background: rgba(255,255,255,0.75);
   border-radius: 16px;
   padding: 10px;
 }
 .raceRow.ended{
-  opacity: 0.55;
+  opacity: 0.50;
+  filter: grayscale(20%);
 }
 .raceLeft{ flex: 1 1 auto; min-width: 0; }
 .raceRight{ flex: 0 0 auto; display:flex; align-items:center; }
@@ -1337,8 +1355,8 @@ input{ width: 100%; }
   flex-wrap: wrap;
 }
 .timePill{
-  border: 1px solid rgba(0,0,0,0.12);
-  background: rgba(255,255,255,0.9);
+  border: 1px solid rgba(0,0,0,0.10);
+  background: rgba(255,255,255,0.92);
   border-radius: 999px;
   padding: 6px 10px;
   font-size: 12px;
@@ -1355,7 +1373,7 @@ input{ width: 100%; }
 .slider{
   position:absolute; cursor:pointer; inset:0;
   background: rgba(0,0,0,0.18);
-  border: 1px solid rgba(0,0,0,0.12);
+  border: 1px solid rgba(0,0,0,0.10);
   transition: .15s;
   border-radius: 999px;
 }
@@ -1369,8 +1387,19 @@ input{ width: 100%; }
   border-radius: 999px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.16);
 }
-.toggle input:checked + .slider{ background: rgba(0,0,0,0.55); }
+.toggle input:checked + .slider{
+  background: var(--accent);
+  border-color: rgba(46,111,62,0.30);
+}
 .toggle input:checked + .slider:before{ transform: translateX(22px); }
+
+/* --- settings helpers (Pro note 1行) --- */
+.proNote{
+  font-weight: 900;
+  opacity: 0.55;
+  margin-left: 6px;
+  white-space: nowrap;
+}
 
 /* --- notifications page --- */
 .pageHead{
@@ -1387,8 +1416,8 @@ input{ width: 100%; }
   align-items: stretch;
   justify-content: space-between;
   gap: 10px;
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(0,0,0,0.02);
+  border: 1px solid rgba(0,0,0,0.08);
+  background: rgba(255,255,255,0.75);
   border-radius: 16px;
   padding: 10px;
 }
@@ -1414,7 +1443,7 @@ input{ width: 100%; }
   width: min(720px, 100%);
   background: #fff;
   border-radius: 20px;
-  border: 1px solid rgba(0,0,0,0.12);
+  border: 1px solid rgba(0,0,0,0.10);
   box-shadow: 0 18px 40px rgba(0,0,0,0.22);
   overflow: hidden;
 }
@@ -1424,7 +1453,7 @@ input{ width: 100%; }
   justify-content: space-between;
   gap: 10px;
   padding: 12px 12px;
-  border-bottom: 1px solid rgba(0,0,0,0.08);
+  border-bottom: 1px solid rgba(0,0,0,0.06);
 }
 .modalTitle{ font-weight: 900; }
 .modalBody{
@@ -1434,7 +1463,7 @@ input{ width: 100%; }
 }
 .modalFoot{
   padding: 12px;
-  border-top: 1px solid rgba(0,0,0,0.08);
+  border-top: 1px solid rgba(0,0,0,0.06);
   display:flex;
   justify-content: flex-end;
 }
@@ -1447,16 +1476,17 @@ input{ width: 100%; }
 .label{
   font-size: 13px;
   font-weight: 900;
-  opacity: 0.85;
+  opacity: 0.80;
 }
 .switchLine{
   display:flex;
   align-items:center;
   gap: 10px;
-  font-weight: 800;
+  font-weight: 900;
 }
 @media (max-width: 560px){
   .row{ grid-template-columns: 1fr; }
   .venueName{ max-width: 58vw; }
 }
 `;
+
