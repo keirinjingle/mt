@@ -1243,6 +1243,7 @@ input{ width: 100%; }
   align-items: center;
   justify-content: center;
 }
+`;
 
 /* --- buttons --- */
 .btn{
