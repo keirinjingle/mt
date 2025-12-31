@@ -2,8 +2,12 @@
 import { initializeApp } from "firebase/app";
 import { getMessaging } from "firebase/messaging";
 
+/**
+ * Firebase Web Config
+ * - 値は Vite の import.meta.env から取得
+ * - 実体は .env.local（git管理しない）
+ */
 const firebaseConfig = {
-  // ★ここはあなたの既存の Web Config を入れる（公開OK）
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId: "mofutimer",
@@ -13,8 +17,15 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
+
+/**
+ * Firebase Cloud Messaging
+ */
 export const messaging = getMessaging(app);
 
-// 公開VAPID鍵
+/**
+ * Web Push 用 VAPID 公開鍵
+ * ※ 公開してOK（秘密鍵ではない）
+ */
 export const VAPID_KEY =
   "BCngjYKqJSC4gdFaFL-SbyHS7KSkvw8VElfPQfDK6XTepKmbP4BuMqD_EhhfTcD5_kzDhCkPrWeRgYETPgN4bG4";

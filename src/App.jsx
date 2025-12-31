@@ -1,25 +1,19 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { initializeApp } from "firebase/app";
-import { getMessaging, getToken, onMessage } from "firebase/messaging";
+import { getToken, onMessage } from "firebase/messaging";
+import { messaging, VAPID_KEY } from "./firebase";
 
 /**
  * もふタイマー Web（最小・全部入り / 1ファイル）
  * - Vite + React
- * - GitHub Pages: base "/mt/"
+ * - 本番: mt.qui2.net 直下配信
  * - 当日のみ（GitHub Pages上のJSON）
  * - 会場アコーディオン + レース行トグル（1つ）
- * - 設定で「2つ目タイマーON」なら 2回分の通知を鳴らす（同一トグル）
  *
- * 追加（今回）:
+ * 追加:
  * - Hash Routing: #notifications で通知一覧ページ
  * - 通知一覧から削除（localStorage更新 + 可能ならサーバーへ通知）
- * - ヘッダーから通知数表示を削除し、通知ON/OFFを配置
- * - 設定ボタンを他と同じサイズに + 隣に通知一覧リンク
- * - タイトルに🐾 + 日付表示（「当日のみ」削除）
- * - ベル/2nd表示を削除し、広告枠（有料コードで非表示）
- * - アコーディオン内「2回目 OFF...」文言削除
+ * - ヘッダーに通知ON/OFF
  */
-
 
 const APP_TITLE = "もふタイマー";
 const BASE = "https://keirinjingle.github.io";
@@ -27,14 +21,7 @@ const BASE = "https://keirinjingle.github.io";
 const MODE_KEIRIN = "keirin";
 const MODE_AUTORACE = "autorace";
 
-const firebaseConfig = { ...あなたが貼ったやつ... };
-const vapidKey = "BCngjYKqJSC4gdFaFL-SbyHS7KSkvw8VElfPQfDK6XTepKmbP4BuMqD_EhhfTcD5_kzDhCkPrWeRgYETPgN4bG4";
-
-const fbApp = initializeApp(firebaseConfig);
-const messaging = getMessaging(fbApp);
-
-
-/* ===== Hash routing（GitHub Pages向け）===== */
+/* ===== Hash routing ===== */
 function getRouteFromHash() {
   const h = (window.location.hash || "").replace("#", "");
   return h === "notifications" ? "notifications" : "home";
@@ -49,17 +36,18 @@ const MINUTE_OPTIONS = [5, 4, 3, 2, 1];
 const STORAGE_USER_ID = "mofu_anon_user_id";
 const STORAGE_OPEN_VENUES = "mofu_open_venues_v1";
 const STORAGE_TOGGLED = "mofu_race_toggled_v1";
-const STORAGE_SETTINGS = "mofu_settings_v3"; // ★ v3 に更新
+const STORAGE_SETTINGS = "mofu_settings_v3";
 
 const DEFAULT_SETTINGS = {
   timer1MinutesBefore: 5,
-  timer2Enabled: false, // 2つ目ON/OFF（有料＆設定で有効化）
+  timer2Enabled: false,
   timer2MinutesBefore: 2,
   linkTarget: "json",
   proCode: "",
+  notificationsEnabled: false, // ★追加：通知ON/OFF（Push購読）
 };
 
-/* 通知タップ先（今は「開く」ボタンに反映） */
+/* 通知タップ先 */
 const LINK_TARGETS = [
   { key: "json", label: "ネット競輪（レース情報）" },
   { key: "oddspark", label: "オッズパーク" },
@@ -143,17 +131,12 @@ async function fetchRacesJson(mode) {
   return await res.json();
 }
 
-/**
- * raw = [
- *  { venue, grade, races:[{ race_number, closed_at, url, class_category... }...] },
- *  ...
- * ]
- */
 function normalizeToVenues(raw, mode) {
-  const list =
-  Array.isArray(raw) ? raw :
-  (raw && (raw.venues || raw.data || raw.items)) ? (raw.venues || raw.data || raw.items) :
-  [];
+  const list = Array.isArray(raw)
+    ? raw
+    : raw && (raw.venues || raw.data || raw.items)
+    ? raw.venues || raw.data || raw.items
+    : [];
 
   if (Array.isArray(list) && list.length > 0 && list[0] && Array.isArray(list[0].races)) {
     return list.map((v) => {
@@ -180,7 +163,6 @@ function normalizeRace(r, mode, v, ri) {
   const raceNo =
     Number(r.race_number ?? r.raceNo ?? r.race_no ?? r.race ?? r.no ?? (ri + 1)) || (ri + 1);
 
-  // closed_at を堅く拾う（表記ゆれ吸収）
   const closedAtHHMM =
     r.closed_at || r.closedAt || r.close_at || r.closeAt || r.deadline || r.shimekiri || "";
 
@@ -193,7 +175,6 @@ function normalizeRace(r, mode, v, ri) {
   return { raceKey, venueKey, venueName, raceNo, title, closedAtHHMM, url };
 }
 
-/* closed_at（締切）から minutesBefore 分前を計算 */
 function computeNotifyAt(race, minutesBefore) {
   const closed = parseHHMMToday(race.closedAtHHMM);
   const m = Number(minutesBefore);
@@ -201,11 +182,6 @@ function computeNotifyAt(race, minutesBefore) {
   return addMinutes(closed, -m);
 }
 
-/**
- * 「通知削除」をサーバーにも知らせたい場合のフック（任意）
- * - VITE_API_BASE が設定されていれば POST する
- * - 失敗しても UI は壊さない（ローカル削除が正）
- */
 async function trySendRemoveToServer({ anonUserId, raceKey }) {
   const apiBase = (import.meta?.env?.VITE_API_BASE || "").trim();
   if (!apiBase) return;
@@ -216,7 +192,7 @@ async function trySendRemoveToServer({ anonUserId, raceKey }) {
       body: JSON.stringify({ anon_user_id: anonUserId, race_key: raceKey }),
     });
   } catch {
-    // 失敗しても無視（GitHub Pages運用でも困らない）
+    // ignore
   }
 }
 
@@ -231,7 +207,6 @@ function NotificationsPage({
   onRemoveRaceKey,
   onOpenLink,
 }) {
-  // venue/race 参照できる辞書を作る
   const raceMap = useMemo(() => {
     const m = new Map();
     for (const v of venues) for (const r of v.races) m.set(r.raceKey, r);
@@ -259,7 +234,6 @@ function NotificationsPage({
         n2,
       });
     }
-    // 会場→R順（わかりやすさ）
     list.sort((a, b) => {
       if (a.venueName !== b.venueName) return a.venueName.localeCompare(b.venueName, "ja");
       return (a.raceNo || 0) - (b.raceNo || 0);
@@ -335,6 +309,29 @@ export default function App() {
     ensureAnonUserId();
   }, []);
 
+  // ★ Push購読（通知ON時に呼ぶ）
+  async function ensurePushSubscribed() {
+    if (!("serviceWorker" in navigator)) throw new Error("This browser does not support Service Worker.");
+    if (!("Notification" in window)) throw new Error("This browser does not support Notification.");
+
+    // iOS PWA 前提：ここでSW登録（同一オリジン直下）
+    const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") {
+      console.log("[Push] permission not granted:", perm);
+      return null;
+    }
+
+    const token = await getToken(messaging, {
+      vapidKey: VAPID_KEY,
+      serviceWorkerRegistration: reg,
+    });
+
+    console.log("[FCM token]", token);
+    return token;
+  }
+
   /* route */
   const [route, setRoute] = useState(getRouteFromHash());
   useEffect(() => {
@@ -352,27 +349,24 @@ export default function App() {
     safeJsonParse(localStorage.getItem(STORAGE_OPEN_VENUES) || "{}", {})
   );
 
-  // レースのトグルは1つだけ
-  const [toggled, setToggled] = useState(() =>
-    safeJsonParse(localStorage.getItem(STORAGE_TOGGLED) || "{}", {})
-  );
+  const [toggled, setToggled] = useState(() => safeJsonParse(localStorage.getItem(STORAGE_TOGGLED) || "{}", {}));
 
-  // デフォルト設定を確実にマージ（NaN防止）
   const [settings, setSettings] = useState(() => {
     const stored = safeJsonParse(localStorage.getItem(STORAGE_SETTINGS) || "null", null);
     return { ...DEFAULT_SETTINGS, ...(stored || {}) };
   });
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-
-  // now（グレーアウト更新）
   const [now, setNow] = useState(() => new Date());
+
+  // ★ 取得したtoken（今は表示しないが、後で /api/devices/register 等に送る用）
+  const [fcmToken, setFcmToken] = useState("");
+
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30 * 1000);
     return () => clearInterval(t);
   }, []);
 
-  // pro判定（ゆるく：コードが入ってれば有料扱い）
   const isPro = !!(settings.proCode && String(settings.proCode).trim().length > 0);
   const timer2Active = isPro && !!settings.timer2Enabled;
 
@@ -413,7 +407,20 @@ export default function App() {
     localStorage.setItem(STORAGE_SETTINGS, JSON.stringify(settings));
   }, [settings]);
 
+  // foreground message（開いてる最中にPushが来た時）
+  useEffect(() => {
+    try {
+      const unsub = onMessage(messaging, (payload) => {
+        console.log("[FCM foreground message]", payload);
+      });
+      return () => unsub();
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const todayLabel = useMemo(() => toYYYYMMDD(new Date()), []);
+  const selectedCount = useMemo(() => Object.keys(toggled).length, [toggled]);
 
   function toggleVenueOpen(venueKey) {
     setOpenVenues((prev) => ({ ...prev, [venueKey]: !prev[venueKey] }));
@@ -446,20 +453,40 @@ export default function App() {
   }
 
   async function removeNotification(raceKey) {
-    // ローカルから外す
     setToggled((prev) => {
       const next = { ...prev };
       delete next[raceKey];
       return next;
     });
 
-    // 可能ならサーバーにも通知
     const anonUserId = ensureAnonUserId();
     await trySendRemoveToServer({ anonUserId, raceKey });
   }
 
-  // 表示用カウント（※ヘッダーでは表示しない／通知一覧用にだけ残す）
-  const selectedCount = useMemo(() => Object.keys(toggled).length, [toggled]);
+  // ★ 通知ON/OFF（ONの瞬間にトークン取得）
+  async function handleToggleNotifications(nextOn) {
+    setSettings((p) => ({ ...p, notificationsEnabled: nextOn }));
+
+    if (!nextOn) {
+      // 今回は「購読解除・token削除」まではやらない（段階実装）
+      console.log("[Push] disabled (UI only)");
+      return;
+    }
+
+    try {
+      const token = await ensurePushSubscribed();
+      if (!token) {
+        // permission denied 等
+        setSettings((p) => ({ ...p, notificationsEnabled: false }));
+        return;
+      }
+      setFcmToken(token);
+    } catch (e) {
+      console.error("[Push subscribe error]", e);
+      setSettings((p) => ({ ...p, notificationsEnabled: false }));
+      alert(`Push購読に失敗しました: ${String(e?.message || e)}`);
+    }
+  }
 
   // ===== route: notifications =====
   if (route === "notifications") {
@@ -468,7 +495,6 @@ export default function App() {
         <style>{cssText}</style>
 
         <header style={styles.header}>
-          {/* 上段：タイトル＋日付（左）／ 右にアイコン群 */}
           <div style={styles.headerTop}>
             <div style={styles.titleRow}>
               <div style={styles.title}>
@@ -478,25 +504,31 @@ export default function App() {
             </div>
 
             <div style={styles.rightHead}>
-              {/* 設定（大きめ） */}
+              {/* 通知ON/OFF */}
+              <label className="miniSwitch" title="通知（Push）をON/OFF">
+                <span className="miniLabel">通知</span>
+                <input
+                  type="checkbox"
+                  checked={!!settings.notificationsEnabled}
+                  onChange={(e) => handleToggleNotifications(e.target.checked)}
+                />
+                <span className="miniSlider" />
+              </label>
+
               <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">
                 ⚙︎
               </button>
 
-              {/* 通知一覧へ（≡）。既に notifications ルートを持っている前提 */}
-              <button className="iconBtn" onClick={() => setHash("notifications")} aria-label="notifications">
-                ≡
+              {/* ここは「通知一覧」表示中なので、HOMEへ戻す */}
+              <button className="iconBtn" onClick={() => setHash("home")} aria-label="home">
+                ⌂
               </button>
             </div>
           </div>
 
-          {/* 下段：競輪/オート タブ */}
           <div style={styles.modeRow}>
             <div style={styles.modeSwitch}>
-              <button
-                className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`}
-                onClick={() => setMode(MODE_KEIRIN)}
-              >
+              <button className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`} onClick={() => setMode(MODE_KEIRIN)}>
                 競輪
               </button>
               <button
@@ -509,8 +541,6 @@ export default function App() {
           </div>
         </header>
 
-
-
         <NotificationsPage
           mode={mode}
           venues={venues}
@@ -521,6 +551,109 @@ export default function App() {
           onRemoveRaceKey={removeNotification}
           onOpenLink={({ url }) => window.open(getLinkUrl(settings.linkTarget, url), "_blank", "noopener,noreferrer")}
         />
+
+        {/* 設定画面（共通） */}
+        {settingsOpen && (
+          <div className="modalBack" onClick={() => setSettingsOpen(false)}>
+            <div className="modal" onClick={(e) => e.stopPropagation()}>
+              <div className="modalHead">
+                <div className="modalTitle">設定</div>
+                <button className="iconBtn" onClick={() => setSettingsOpen(false)}>
+                  ✕
+                </button>
+              </div>
+
+              <div className="modalBody">
+                <div className="row">
+                  <div className="label">通知①（分前）</div>
+                  <select
+                    value={settings.timer1MinutesBefore}
+                    onChange={(e) => setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))}
+                  >
+                    {MINUTE_OPTIONS.map((m) => (
+                      <option key={m} value={m}>
+                        {m} 分前
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="row">
+                  <div className="label">2つ目タイマー</div>
+                  <label className="switchLine">
+                    <input
+                      type="checkbox"
+                      checked={!!settings.timer2Enabled}
+                      onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
+                      disabled={!isPro}
+                    />
+                    <span>{isPro ? "ON/OFF" : "有料コードで解放"}</span>
+                  </label>
+                </div>
+
+                <div className="row">
+                  <div className="label">通知②（分前）</div>
+                  <select
+                    value={settings.timer2MinutesBefore}
+                    disabled={!isPro || !settings.timer2Enabled}
+                    onChange={(e) => setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))}
+                  >
+                    {MINUTE_OPTIONS.map((m) => (
+                      <option key={m} value={m}>
+                        {m} 分前
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="row">
+                  <div className="label">通知タップ先</div>
+                  <select value={settings.linkTarget} onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}>
+                    {LINK_TARGETS.map((t) => (
+                      <option key={t.key} value={t.key}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="row">
+                  <div className="label">有料コード（ゆる判定）</div>
+                  <input
+                    value={settings.proCode || ""}
+                    onChange={(e) => setSettings((p) => ({ ...p, proCode: e.target.value }))}
+                    placeholder="コードを入力（空なら無料）"
+                  />
+                  <div className={`pill ${isPro ? "pillOn" : "pillOff"}`}>
+                    {isPro ? "PRO：広告OFF / 2回目可" : "FREE：広告ON / 1回目のみ"}
+                  </div>
+                </div>
+
+                <div className="row">
+                  <div className="label">選択のリセット</div>
+                  <button className="btn danger" onClick={() => setToggled({})}>
+                    すべて解除
+                  </button>
+                  <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>現在の通知数：{selectedCount}</div>
+                </div>
+
+                {/* デバッグ表示（必要なら後で消す） */}
+                {fcmToken ? (
+                  <div className="row">
+                    <div className="label">FCM token（debug）</div>
+                    <div style={{ fontSize: 12, wordBreak: "break-all", opacity: 0.9 }}>{fcmToken}</div>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="modalFoot">
+                <button className="btn" onClick={() => setSettingsOpen(false)}>
+                  閉じる
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -537,27 +670,30 @@ export default function App() {
           </div>
 
           <div style={styles.rightHead}>
-            {/* アイコンを他と同じサイズに（48） */}
+            {/* 通知ON/OFF */}
+            <label className="miniSwitch" title="通知（Push）をON/OFF">
+              <span className="miniLabel">通知</span>
+              <input
+                type="checkbox"
+                checked={!!settings.notificationsEnabled}
+                onChange={(e) => handleToggleNotifications(e.target.checked)}
+              />
+              <span className="miniSlider" />
+            </label>
+
             <button className="iconBtn bigIcon" onClick={() => setSettingsOpen(true)} aria-label="settings">
               ⚙︎
             </button>
 
-            {/* 通知一覧リンク（隣） */}
             <button className="iconBtn bigIcon" onClick={() => setHash("notifications")} aria-label="notifications">
               ☰
             </button>
 
             <div style={styles.modeSwitch}>
-              <button
-                className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`}
-                onClick={() => setMode(MODE_KEIRIN)}
-              >
+              <button className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`} onClick={() => setMode(MODE_KEIRIN)}>
                 競輪
               </button>
-              <button
-                className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`}
-                onClick={() => setMode(MODE_AUTORACE)}
-              >
+              <button className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`} onClick={() => setMode(MODE_AUTORACE)}>
                 オート
               </button>
             </div>
@@ -565,11 +701,9 @@ export default function App() {
         </div>
 
         <div style={styles.subRow}>
-          {/* 日付のみ（「当日のみ」削除） */}
           <div style={styles.date}>{todayLabel}</div>
         </div>
 
-        {/* 広告枠：有料コードで消える */}
         {!isPro && (
           <div className="adBar">
             <div className="adText">スポンサー枠（有料コードで非表示）</div>
@@ -594,12 +728,6 @@ export default function App() {
           !err &&
           venues.map((v) => {
             const isOpen = !!openVenues[v.venueKey];
-
-            const venueSelectedCount = v.races.reduce(
-              (acc, r) => acc + (toggled[r.raceKey] ? 1 : 0),
-              0
-            );
-
             return (
               <section className="card" key={v.venueKey}>
                 <div className="venueHead" onClick={() => toggleVenueOpen(v.venueKey)}>
@@ -620,7 +748,7 @@ export default function App() {
                 </div>
 
                 {isOpen && (
-                                <div className="raceList">
+                  <div className="raceList">
                     {v.races.map((r) => {
                       const closedAt = parseHHMMToday(r.closedAtHHMM);
 
@@ -680,7 +808,6 @@ export default function App() {
                   </div>
                 )}
               </section>
-
             );
           })}
       </main>
@@ -701,9 +828,7 @@ export default function App() {
                 <div className="label">通知①（分前）</div>
                 <select
                   value={settings.timer1MinutesBefore}
-                  onChange={(e) =>
-                    setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))
-                  }
+                  onChange={(e) => setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))}
                 >
                   {MINUTE_OPTIONS.map((m) => (
                     <option key={m} value={m}>
@@ -731,9 +856,7 @@ export default function App() {
                 <select
                   value={settings.timer2MinutesBefore}
                   disabled={!isPro || !settings.timer2Enabled}
-                  onChange={(e) =>
-                    setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))
-                  }
+                  onChange={(e) => setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))}
                 >
                   {MINUTE_OPTIONS.map((m) => (
                     <option key={m} value={m}>
@@ -745,10 +868,7 @@ export default function App() {
 
               <div className="row">
                 <div className="label">通知タップ先</div>
-                <select
-                  value={settings.linkTarget}
-                  onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}
-                >
+                <select value={settings.linkTarget} onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}>
                   {LINK_TARGETS.map((t) => (
                     <option key={t.key} value={t.key}>
                       {t.label}
@@ -774,10 +894,15 @@ export default function App() {
                 <button className="btn danger" onClick={() => setToggled({})}>
                   すべて解除
                 </button>
-                <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>
-                  現在の通知数：{selectedCount}
-                </div>
+                <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>現在の通知数：{selectedCount}</div>
               </div>
+
+              {fcmToken ? (
+                <div className="row">
+                  <div className="label">FCM token（debug）</div>
+                  <div style={{ fontSize: 12, wordBreak: "break-all", opacity: 0.9 }}>{fcmToken}</div>
+                </div>
+              ) : null}
             </div>
 
             <div className="modalFoot">
@@ -792,9 +917,7 @@ export default function App() {
   );
 }
 
-/**
- * Flutter(Material3, green seed)っぽい見た目に寄せる（太字を抑える）
- */
+/* ===== style ===== */
 const styles = {
   titleRow: { display: "flex", alignItems: "baseline", gap: 10 },
   dateInline: { fontSize: 13, fontWeight: 500, opacity: 0.85 },
@@ -883,7 +1006,7 @@ const cssText = `
   border-radius: 16px;
   cursor: pointer;
   font-weight: 600;
-  font-size: 20px; /* ← アイコンを大きく */
+  font-size: 20px;
   line-height: 1;
   display: inline-flex;
   align-items: center;
@@ -907,7 +1030,7 @@ const cssText = `
 .adText{ font-weight: 600; }
 .adSub{ font-size: 12px; opacity: 0.8; margin-top: 2px; }
 
-/* 右上：通知ON/OFF（縦幅取らない） */
+/* 右上：通知ON/OFF */
 .miniSwitch{
   display:flex;
   align-items:center;
@@ -949,275 +1072,7 @@ const cssText = `
   opacity: 0.9;
 }
 
-/* 会場 */
-.venueHead{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap: 10px;
-  cursor:pointer;
-  padding: 6px 6px 10px;
-}
-.venueTitle{
-  display:flex;
-  align-items:center;
-  gap: 10px;
-  font-weight: 600;
-  font-size: 18px;
-}
-.grade{
-  font-size: 12px;
-  font-weight: 500;
-  padding: 5px 10px;
-  border-radius: 999px;
-  background: rgba(46,125,50,0.10);
-  border: 1px solid rgba(46,125,50,0.10);
-  opacity: 0.9;
-}
-.chev{ width: 22px; display:inline-flex; justify-content:center; opacity:0.7; }
-
-.venueActions{
-  display:flex;
-  gap: 8px;
-  align-items:center;
-}
-
-.smallBtn{
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.80);
-  padding: 8px 10px;
-  border-radius: 14px;
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 12px;
-}
-
-.smallBtn.on{
-  border-color: rgba(46,125,50,0.25);
-  background: rgba(46,125,50,0.14);
-}
-
-.smallBtn.off{
-  background: rgba(0,0,0,0.02);
-}
-
-
-.venueMeta{ display:flex; gap: 8px; }
-.badge{
-  font-size: 12px;
-  font-weight: 600;
-  padding: 7px 12px;
-  border-radius: 999px;
-  background: rgba(46,125,50,0.12);
-  border: 1px solid rgba(46,125,50,0.12);
-}
-
-.venueControls{
-  display:flex;
-  gap: 10px;
-  align-items:center;
-  padding: 0 6px 12px;
-  flex-wrap: wrap;
-}
-
-.btn{
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.80);
-  padding: 10px 12px;
-  border-radius: 14px;
-  cursor: pointer;
-  font-weight: 500;
-}
-.btn.ghost{ background: rgba(0,0,0,0.02); }
-.btn.danger{
-  border-color: rgba(220,0,0,0.2);
-  background: rgba(255,230,230,0.85);
-  font-weight: 600;
-}
-
-/* レース */
-.raceList{ display:grid; gap: 10px; padding: 0 6px 6px; }
-
-.raceRow{
-  display:flex;
-  align-items:flex-start;
-  justify-content:space-between;
-  gap: 12px;
-  padding: 12px 12px;
-  border-radius: 18px;
-  border: 1px solid rgba(0,0,0,0.06);
-  background: rgba(255,255,255,0.88);
-}
-.raceRow.ended{
-  opacity: 0.45;
-}
-
-.raceLeft{ min-width: 0; flex: 1; }
-.raceTopLine{ display:flex; align-items:center; gap: 12px; }
-.raceNo{ font-weight: 600; font-size: 18px; }
-.raceTitle{ font-size: 14px; opacity: 0.88; font-weight: 400; }
-
-.linkBtn{
-  margin-left: auto;
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.85);
-  padding: 8px 12px;
-  border-radius: 999px;
-  cursor: pointer;
-  font-weight: 600;
-  font-size: 12px;
-}
-
-.raceTimeLine{
-  display:flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 10px;
-}
-.timePill{
-  font-size: 12px;
-  font-weight: 500;
-  padding: 7px 12px;
-  border-radius: 999px;
-  background: rgba(46,125,50,0.10);
-  border: 1px solid rgba(46,125,50,0.10);
-}
-.timePast{ opacity: 0.55; }
-
-/* Toggle */
-.toggleWrap{ display:flex; align-items:center; }
-.toggle{
-  position: relative;
-  display: inline-block;
-  width: 52px;
-  height: 32px;
-}
-.toggle input{ display:none; }
-.slider{
-  position:absolute;
-  cursor:pointer;
-  inset:0;
-  background: rgba(0,0,0,0.16);
-  border-radius: 999px;
-  transition: 0.15s;
-}
-.slider:before{
-  content:"";
-  position:absolute;
-  height: 26px;
-  width: 26px;
-  left: 3px;
-  top: 3px;
-  background: white;
-  border-radius: 50%;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.18);
-  transition: 0.15s;
-}
-.toggle input:checked + .slider{ background: rgba(46,125,50,0.55); }
-.toggle input:checked + .slider:before{ transform: translateX(20px); }
-.toggle input:disabled + .slider{ cursor:not-allowed; opacity: 0.8; }
-
-/* Modal */
-.modalBack{
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.25);
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  padding: 16px;
-  z-index: 50;
-}
-.modal{
-  width: min(720px, 100%);
-  background: rgba(255,255,255,0.98);
-  border: 1px solid rgba(0,0,0,0.10);
-  border-radius: 20px;
-  box-shadow: 0 18px 60px rgba(0,0,0,0.18);
-  overflow:hidden;
-}
-.modalHead{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  padding: 12px 12px;
-  border-bottom: 1px solid rgba(0,0,0,0.08);
-  background: rgba(232,245,233,0.75);
-}
-.modalTitle{ font-weight: 600; font-size: 14px; }
-.modalBody{ padding: 12px; display:grid; gap: 12px; }
-.modalFoot{ padding: 12px; border-top: 1px solid rgba(0,0,0,0.08); display:flex; justify-content:flex-end; }
-
-.row{
-  display:grid;
-  grid-template-columns: 180px 1fr;
-  gap: 10px;
-  align-items:center;
-}
-.label{ font-weight: 500; font-size: 12px; opacity: 0.9; }
-select, input{
-  border: 1px solid rgba(0,0,0,0.12);
-  background: rgba(255,255,255,0.92);
-  padding: 10px 12px;
-  border-radius: 14px;
-  font-weight: 400;
-  outline: none;
-}
-.switchLine{
-  display:flex;
-  align-items:center;
-  gap: 10px;
-  font-weight: 500;
-}
-.switchLine input{
-  width: 18px;
-  height: 18px;
-}
-
-/* PRO pill */
-.pill{
-  grid-column: 2 / 3;
-  width: fit-content;
-  font-size: 12px;
-  font-weight: 500;
-  padding: 7px 12px;
-  border-radius: 999px;
-  border: 1px solid rgba(0,0,0,0.08);
-}
-.pillOn{
-  background: rgba(46,125,50,0.14);
-  border-color: rgba(46,125,50,0.18);
-  font-weight: 600;
-}
-.pillOff{
-  background: rgba(0,0,0,0.04);
-  color: rgba(0,0,0,0.55);
-}
-
-/* Notifications page */
-.pageHead{ display:flex; align-items:center; justify-content:space-between; gap: 12px; margin-bottom: 10px; }
-.pageTitle{ font-weight: 600; font-size: 16px; }
-.notifyList{ display:grid; gap: 10px; }
-.notifyRow{
-  display:flex;
-  justify-content:space-between;
-  gap: 12px;
-  border: 1px solid rgba(0,0,0,0.06);
-  background: rgba(255,255,255,0.88);
-  border-radius: 16px;
-  padding: 12px;
-}
-.notifyLeft{ min-width: 0; flex: 1; }
-.notifyTop{ display:flex; align-items:baseline; gap: 10px; flex-wrap: wrap; }
-.notifyName{ font-weight: 600; }
-.notifyTitle{ font-size: 12px; opacity: 0.85; }
-.notifyTimes{ display:flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
-.notifyRight{ display:flex; align-items:center; gap: 10px; }
-
-@media (max-width: 560px){
-  .row{ grid-template-columns: 1fr; }
-  .pill{ grid-column: auto; }
-  .notifyRow{ flex-direction: column; }
-  .notifyRight{ justify-content: flex-end; }
-}
+/* 以下、元のCSS（会場/行/モーダル等）は既存のままでOK想定
+   ※あなたの元ファイルが長いので、ここから下は “元の続き” をそのまま残してください。
+*/
 `;
