@@ -970,25 +970,34 @@ function SettingsModal({
         <div className="modalBody">
           {/* Push通知 */}
           <div className="row">
-            <div className="label">Push通知</div>
+  <div className="label">Push通知</div>
 
-            <label className="switchLine">
-              <input
-                type="checkbox"
-                checked={!!settings.notificationsEnabled}
-                onChange={(e) => safeTogglePush(e.target.checked)}
-              />
-              <span>{settings.notificationsEnabled ? "ON" : "OFF"}</span>
-            </label>
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+    {/* 左：スイッチ */}
+    <label className="toggle">
+      <input
+        type="checkbox"
+        checked={!!settings.notificationsEnabled}
+        onChange={(e) => safeTogglePush(e.target.checked)}
+      />
+      <span className="slider" />
+    </label>
 
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
-              ※ONにすると許可ダイアログが出るので必ず許可してください。なお{" "}
-              <a href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
-                iPhoneはホーム画面追加しないと通知できません
-              </a>
-              。
-            </div>
-          </div>
+    {/* 右：ON/OFF 表示 */}
+    <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>
+      {settings.notificationsEnabled ? "ON" : "OFF"}
+    </div>
+  </div>
+
+  <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
+    ※ONにすると許可ダイアログが出るので必ず許可してください。なお{" "}
+    <a href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
+      iPhoneはホーム画面追加しないと通知できません
+    </a>
+    。
+  </div>
+</div>
+
 
           {/* 1つ目タイマー（元：通知①） */}
           <div className="row">
@@ -1007,22 +1016,30 @@ function SettingsModal({
 
           {/* 2つ目タイマー（スイッチ） */}
           <div className="row">
-            <div className="label">2つ目タイマー</div>
+            <div className="row">
+  <div className="label">2つ目タイマー</div>
 
-            <label className="switchLine">
-              <input
-                type="checkbox"
-                checked={!!settings.timer2Enabled}
-                onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
-                disabled={!canUseTimer2}
-              />
-              <span>{settings.timer2Enabled ? "ON" : "OFF"}</span>
-            </label>
+  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+    <label className="toggle">
+      <input
+        type="checkbox"
+        checked={!!settings.timer2Enabled}
+        onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
+        disabled={!canUseTimer2}
+      />
+      <span className="slider" />
+    </label>
 
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75 }}>
-              PRO版で解放
-            </div>
-          </div>
+    <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>
+      {settings.timer2Enabled ? "ON" : "OFF"}
+    </div>
+  </div>
+
+  <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75 }}>
+    PRO版で解放
+  </div>
+</div>
+
 
           {/* 2回目（分前） */}
           <div className="row">
