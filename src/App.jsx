@@ -925,6 +925,7 @@ export default function App() {
           selectedCount={selectedCount}
           setToggled={setToggled}
           fcmToken={fcmToken}
+          handleToggleNotifications={handleToggleNotifications}  // ★これを追加
         />
       )}
     </div>
@@ -943,19 +944,17 @@ function SettingsModal({
   selectedCount,
   setToggled,
   fcmToken,
-  handleToggleNotifications, // 親から渡す（関数）
+  handleToggleNotifications, // ★必須：親から渡す
 }) {
   const canUseTimer2 = isPro && timer2Allowed;
 
-  // ★ここが重要：関数じゃなくても落ちないようにする
-  const togglePush = async (checked) => {
-    if (typeof handleToggleNotifications === "function") {
-      await handleToggleNotifications(checked);
-    } else {
-      // 親が渡してない / 変な値でもクラッシュしない
-      setSettings((p) => ({ ...p, notificationsEnabled: checked }));
+  // ★保険：未定義なら落とさず警告（原因調査しやすく）
+  const safeTogglePush = async (nextOn) => {
+    if (typeof handleToggleNotifications !== "function") {
       console.warn("[SettingsModal] handleToggleNotifications is not a function:", handleToggleNotifications);
+      return;
     }
+    await handleToggleNotifications(nextOn);
   };
 
   return (
@@ -973,200 +972,141 @@ function SettingsModal({
           <div className="row">
             <div className="label">Push通知</div>
 
-            <div className="fieldBox">
-              <label className="switchLine" style={{ justifyContent: "space-between" }}>
-                <div className="switchWrap" aria-label="push-switch">
-                  <input
-                    type="checkbox"
-                    checked={!!settings.notificationsEnabled}
-                    onChange={(e) => togglePush(e.target.checked)}
-                  />
-                  <span className="switchUi" />
-                </div>
+            <label className="switchLine">
+              <input
+                type="checkbox"
+                checked={!!settings.notificationsEnabled}
+                onChange={(e) => safeTogglePush(e.target.checked)}
+              />
+              <span>{settings.notificationsEnabled ? "ON" : "OFF"}</span>
+            </label>
 
-                <span className="switchText">{settings.notificationsEnabled ? "ON" : "OFF"}</span>
-              </label>
-
-              <div className="note">
-                ※ONにすると許可ダイアログが出るので必ず許可してください。なお
-                <a className="link" href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
-                  iPhoneはホーム画面追加しないと通知できません
-                </a>
-                。
-              </div>
+            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
+              ※ONにすると許可ダイアログが出るので必ず許可してください。なお{" "}
+              <a href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
+                iPhoneはホーム画面追加しないと通知できません
+              </a>
+              。
             </div>
           </div>
 
-          {/* 1つ目タイマー */}
+          {/* 1つ目タイマー（元：通知①） */}
           <div className="row">
             <div className="label">1つ目タイマー</div>
-            <div className="fieldBox">
-              <select
-                value={settings.timer1MinutesBefore}
-                onChange={(e) => setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))}
-              >
-                {[5, 4, 3, 2, 1].map((m) => (
-                  <option key={m} value={m}>
-                    {m} 分前
-                  </option>
-                ))}
-              </select>
-            </div>
+            <select
+              value={settings.timer1MinutesBefore}
+              onChange={(e) => setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))}
+            >
+              {MINUTE_OPTIONS.map((m) => (
+                <option key={m} value={m}>
+                  {m} 分前
+                </option>
+              ))}
+            </select>
           </div>
 
-          {/* 2つ目タイマー */}
+          {/* 2つ目タイマー（スイッチ） */}
           <div className="row">
             <div className="label">2つ目タイマー</div>
 
-            <div className="fieldBox">
-              <label className="switchLine" style={{ justifyContent: "space-between", opacity: canUseTimer2 ? 1 : 0.55 }}>
-                <div className="switchWrap" aria-label="timer2-switch">
-                  <input
-                    type="checkbox"
-                    checked={!!settings.timer2Enabled}
-                    onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
-                    disabled={!canUseTimer2}
-                  />
-                  <span className="switchUi" />
-                </div>
+            <label className="switchLine">
+              <input
+                type="checkbox"
+                checked={!!settings.timer2Enabled}
+                onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
+                disabled={!canUseTimer2}
+              />
+              <span>{settings.timer2Enabled ? "ON" : "OFF"}</span>
+            </label>
 
-                <span className="switchText">{settings.timer2Enabled ? "ON" : "OFF"}</span>
-              </label>
-
-              {!canUseTimer2 && <div className="note">PRO版で解放</div>}
+            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75 }}>
+              PRO版で解放
             </div>
           </div>
 
           {/* 2回目（分前） */}
           <div className="row">
             <div className="label">2回目（分前）</div>
-            <div className="fieldBox">
-              <select
-                value={settings.timer2MinutesBefore}
-                disabled={!canUseTimer2 || !settings.timer2Enabled}
-                onChange={(e) => setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))}
-              >
-                {[5, 4, 3, 2, 1].map((m) => (
-                  <option key={m} value={m}>
-                    {m} 分前
-                  </option>
-                ))}
-              </select>
-            </div>
+            <select
+              value={settings.timer2MinutesBefore}
+              disabled={!canUseTimer2 || !settings.timer2Enabled}
+              onChange={(e) => setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))}
+            >
+              {MINUTE_OPTIONS.map((m) => (
+                <option key={m} value={m}>
+                  {m} 分前
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* 通知タップ先 */}
           <div className="row">
             <div className="label">通知タップ先</div>
-            <div className="fieldBox">
-              <select value={settings.linkTarget} onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}>
-                <option value="json">ネット競輪（レース情報）</option>
-                <option value="oddspark">オッズパーク</option>
-                <option value="chariloto">チャリロト</option>
-                <option value="winticket">WINTICKET</option>
-                <option value="dmm">DMM競輪</option>
-              </select>
-            </div>
+            <select
+              value={settings.linkTarget}
+              onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}
+            >
+              {LINK_TARGETS.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* 有料コード */}
           <div className="row">
             <div className="label">有料コード</div>
-            <div className="fieldBox">
-              <input
-                value={settings.proCode || ""}
-                onChange={(e) => setSettings((p) => ({ ...p, proCode: e.target.value }))}
-                placeholder="コードを入力"
-              />
-              <div className="note">期間：登録日から月末まで（20日を過ぎてからの登録は翌々月の月末まで）</div>
-              {proState?.verified && proState?.message ? <div className="note" style={{ opacity: 0.85 }}>{proState.message}</div> : null}
+            <input
+              value={settings.proCode || ""}
+              onChange={(e) => setSettings((p) => ({ ...p, proCode: e.target.value }))}
+              placeholder="コードを入力"
+            />
+            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.4 }}>
+              期間：登録日から月末まで（20日を過ぎてからの登録は翌々月の月末まで）
             </div>
+            {proState?.verified && proState?.message ? (
+              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>{proState.message}</div>
+            ) : null}
           </div>
 
           {/* 通知上限 */}
           <div className="row">
             <div className="label">通知上限</div>
-            <div className="fieldBox">
-              <div style={{ fontSize: 14, opacity: 0.9 }}>
-                現在：{selectedCount} 件 / 上限：{maxNotifications} 件
-              </div>
+            <div style={{ gridColumn: "2 / 3", fontSize: 14 }}>
+              現在：{selectedCount} 件 / 上限：{maxNotifications} 件
             </div>
           </div>
 
           {/* 選択のリセット */}
           <div className="row">
             <div className="label">選択のリセット</div>
-            <div className="fieldBox">
-              <button className="btn danger" onClick={() => setToggled({})}>すべて解除</button>
-              <div className="note">現在の通知数：{selectedCount}</div>
-            </div>
+            <button className="btn danger" onClick={() => setToggled({})}>
+              すべて解除
+            </button>
+            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>現在の通知数：{selectedCount}</div>
           </div>
 
-          {/* debug */}
+          {/* デバッグ token（必要なら） */}
           {fcmToken ? (
             <div className="row">
               <div className="label">FCM token（debug）</div>
-              <div className="fieldBox">
-                <div style={{ fontSize: 12, wordBreak: "break-all", opacity: 0.9 }}>{fcmToken}</div>
-              </div>
+              <div style={{ fontSize: 12, wordBreak: "break-all", opacity: 0.9 }}>{fcmToken}</div>
             </div>
           ) : null}
         </div>
 
         <div className="modalFoot">
-          <button className="btn" onClick={onClose}>閉じる</button>
+          <button className="btn" onClick={onClose}>
+            閉じる
+          </button>
         </div>
-
-        <style>{`
-          .fieldBox{ grid-column: 2 / 3; display: grid; gap: 8px; }
-          .note{ font-size: 12px; opacity: .75; line-height: 1.45; }
-          .link{ color: inherit; text-decoration: underline; text-underline-offset: 3px; }
-
-          .switchWrap{ position: relative; width: 54px; height: 30px; }
-          .switchWrap input{
-            position:absolute; inset:0;
-            width:100%; height:100%;
-            opacity:0; margin:0;
-            cursor:pointer;
-            z-index:2;
-          }
-          .switchUi{
-            position:absolute; inset:0;
-            border-radius:999px;
-            background: rgba(0,0,0,0.16);
-            border: 1px solid rgba(0,0,0,0.10);
-            transition: .15s;
-          }
-          .switchUi:before{
-            content:"";
-            position:absolute;
-            width: 22px; height: 22px;
-            border-radius:50%;
-            top: 3px; left: 3px;
-            background:#fff;
-            box-shadow: 0 4px 14px rgba(0,0,0,0.16);
-            transition: .15s;
-          }
-          .switchWrap input:checked + .switchUi{
-            background: rgba(46,125,50,0.55);
-            border-color: rgba(46,125,50,0.25);
-          }
-          .switchWrap input:checked + .switchUi:before{
-            transform: translateX(24px);
-          }
-          .switchText{ font-weight: 600; opacity: .9; }
-
-          .switchLine{
-            display:flex;
-            align-items:center;
-            gap: 10px;
-            user-select:none;
-          }
-        `}</style>
       </div>
     </div>
   );
 }
+
 
 
 
