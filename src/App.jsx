@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { initializeApp } from "firebase/app";
+import { getMessaging, getToken, onMessage } from "firebase/messaging";
 
 /**
  * もふタイマー Web（最小・全部入り / 1ファイル）
@@ -18,11 +20,19 @@ import React, { useEffect, useMemo, useState } from "react";
  * - アコーディオン内「2回目 OFF...」文言削除
  */
 
+
 const APP_TITLE = "もふタイマー";
 const BASE = "https://keirinjingle.github.io";
 
 const MODE_KEIRIN = "keirin";
 const MODE_AUTORACE = "autorace";
+
+const firebaseConfig = { ...あなたが貼ったやつ... };
+const vapidKey = "BCngjYKqJSC4gdFaFL-SbyHS7KSkvw8VElfPQfDK6XTepKmbP4BuMqD_EhhfTcD5_kzDhCkPrWeRgYETPgN4bG4";
+
+const fbApp = initializeApp(firebaseConfig);
+const messaging = getMessaging(fbApp);
+
 
 /* ===== Hash routing（GitHub Pages向け）===== */
 function getRouteFromHash() {
