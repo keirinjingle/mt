@@ -1751,5 +1751,31 @@ input{ width: 100%; }
   .row{ grid-template-columns: 1fr; }
   .venueName{ max-width: 58vw; }
 }
+
+/* ===== Push通知ヘッダーのクリック阻害対策（最優先） ===== */
+.settingsHeader,
+.settingsHeaderRight {
+  position: relative;
+  z-index: 9999;
+}
+
+.settingsHeaderRight button {
+  position: relative;
+  z-index: 10000;
+  pointer-events: auto;
+}
+
+/* もしモーダル内に透明レイヤーが残っていたら無効化する */
+.modalBody,
+.modalHeader {
+  position: relative;
+  z-index: 1;
+}
+
+/* ボタンのクリックが奪われることがある要素を抑止（説明文など） */
+.settingsHeaderNote {
+  pointer-events: none;
+}
+
 `;
 
