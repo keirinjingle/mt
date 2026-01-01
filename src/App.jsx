@@ -27,6 +27,7 @@ import { messaging, VAPID_KEY } from "./firebase";
  *         max_notifications: 999,   // 未指定なら既定(PRO=999, FREE=10)
  *         timer2_allowed: true,     // 未指定なら既定(PRO=true, FREE=false)
  *         ads_off: true,            // 未指定なら既定(PRO=true, FREE=false)
+ *         period: "optional",
  *         message: "optional"
  *       }
  *
@@ -37,6 +38,10 @@ import { messaging, VAPID_KEY } from "./firebase";
  * 3) 通知削除（任意）
  *   POST {VITE_API_BASE}/notifications/remove
  *     body: { anon_user_id, race_key }
+ *
+ * 4) 通知登録（任意）
+ *   POST {VITE_API_BASE}/subscriptions/set
+ *     body: { anon_user_id, race_key, enabled, closed_at_hhmm, race_url, title, timer1_min, timer2_enabled, timer2_min }
  *
  * ※ VITE_API_BASE が空なら、常にFREE扱い（PRO無効）+ token登録APIも呼びません。
  */
@@ -61,10 +66,7 @@ function getApiBase() {
   return base ? base.replace(/\/$/, "") : "";
 }
 
-
 /* ===== 設定/保存 ===== */
-const MINUTE_OPTIONS = [5, 4, 3, 2, 1];
-
 const STORAGE_USER_ID = "mofu_anon_user_id";
 const STORAGE_OPEN_VENUES = "mofu_open_venues_v1";
 const STORAGE_TOGGLED = "mofu_race_toggled_v1";
@@ -81,7 +83,6 @@ const DEFAULT_SETTINGS = {
   timer2MinutesBefore: 2,
   linkTarget: "json",
   proCode: "",
-
   // 互換のため保持（UIはボタン方式で permission を優先）
   notificationsEnabled: false,
 };
@@ -255,9 +256,16 @@ async function postSubscriptionSetToServer(payload) {
   }
 }
 
-
 /* ===== ページ：通知一覧 ===== */
-function NotificationsPage({ venues, toggled, settings, timer2Active, onBack, onRemoveRaceKey, onOpenLink }) {
+function NotificationsPage({
+  venues,
+  toggled,
+  settings,
+  timer2Active,
+  onBack,
+  onRemoveRaceKey,
+  onOpenLink,
+}) {
   const raceMap = useMemo(() => {
     const m = new Map();
     for (const v of venues) for (const r of v.races) m.set(r.raceKey, r);
@@ -385,7 +393,9 @@ export default function App() {
   const [openVenues, setOpenVenues] = useState(() =>
     safeJsonParse(localStorage.getItem(STORAGE_OPEN_VENUES) || "{}", {})
   );
-  const [toggled, setToggled] = useState(() => safeJsonParse(localStorage.getItem(STORAGE_TOGGLED) || "{}", {}));
+  const [toggled, setToggled] = useState(() =>
+    safeJsonParse(localStorage.getItem(STORAGE_TOGGLED) || "{}", {})
+  );
 
   const [settings, setSettings] = useState(() => {
     const stored = safeJsonParse(localStorage.getItem(STORAGE_SETTINGS) || "null", null);
@@ -406,6 +416,7 @@ export default function App() {
     maxNotifications: 10,
     timer2Allowed: false,
     adsOff: false,
+    period: "",
     message: "",
   });
 
@@ -471,15 +482,10 @@ export default function App() {
   const selectedCount = useMemo(() => Object.keys(toggled).length, [toggled]);
 
   const raceMap = useMemo(() => {
-  const m = new Map();
-  for (const v of venues) for (const r of v.races) m.set(r.raceKey, r);
-  return m;
-}, [venues]);
-
-  // ===== API base =====
-  function getApiBase() {
-    return (import.meta?.env?.VITE_API_BASE || "").trim().replace(/\/$/, "");
-  }
+    const m = new Map();
+    for (const v of venues) for (const r of v.races) m.set(r.raceKey, r);
+    return m;
+  }, [venues]);
 
   // ===== PRO検証（APIでサーバー管理）=====
   const verifyTimerRef = useRef(null);
@@ -505,6 +511,7 @@ export default function App() {
         verified: true,
         pro: false,
         ...defaultsFromProFlag(false),
+        period: "",
         message: "無料版",
       }));
       return;
@@ -518,6 +525,7 @@ export default function App() {
         verified: true,
         pro: false,
         ...defaultsFromProFlag(false),
+        period: "",
         message: "",
       }));
       return;
@@ -553,6 +561,7 @@ export default function App() {
         maxNotifications,
         timer2Allowed,
         adsOff,
+        period: String(data?.period || data?.period_text || data?.valid_until || ""),
         message: String(data?.message || ""),
       });
 
@@ -569,6 +578,7 @@ export default function App() {
         verified: true,
         pro: false,
         ...defaultsFromProFlag(false),
+        period: "",
         message: "検証に失敗しました（FREE扱い）",
       }));
       setSettings((p) => ({ ...p, timer2Enabled: false }));
@@ -596,7 +606,50 @@ export default function App() {
   const maxNotifications =
     Number(proState.maxNotifications || (isPro ? 999 : 10)) || (isPro ? 999 : 10);
 
-  const timer2Active = isPro && timer2Allowed && !!settings.timer2Enabled;
+  // 「2本目を使える資格」（PRO + allowed）
+  const timer2GateOpen = isPro && timer2Allowed;
+  // 「実際に2本目を鳴らす」（資格あり + UIでON）
+  const timer2Active = timer2GateOpen && !!settings.timer2Enabled;
+
+  // ===== Push テスト送信（5秒後に鳴らす）=====
+  const [testPushState, setTestPushState] = useState({ loading: false, message: "" });
+
+  async function sendTestPushAfter5s(token) {
+    const apiBase = getApiBase();
+    if (!apiBase) {
+      setTestPushState({ loading: false, message: "API未設定のためテストできません（VITE_API_BASE）" });
+      return;
+    }
+    const anonUserId = ensureAnonUserId();
+    const t = String(token || "").trim();
+    if (!t) {
+      setTestPushState({ loading: false, message: "token が未取得です" });
+      return;
+    }
+
+    setTestPushState({ loading: true, message: "テスト送信を依頼しました（5秒後に鳴るはず）…" });
+    try {
+      const res = await fetch(`${apiBase}/push/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          anon_user_id: anonUserId,
+          token: t,
+          delay_sec: 5,
+          url: `${window.location.origin}/#notifications`,
+        }),
+      });
+      if (!res.ok) throw new Error(`test push failed: ${res.status}`);
+      const data = await res.json().catch(() => ({}));
+      setTestPushState({
+        loading: false,
+        message: String(data?.message || "OK（5秒後に通知が来なければ端末側/FCM側の問題切り分けへ）"),
+      });
+    } catch (e) {
+      console.error("[test push error]", e);
+      setTestPushState({ loading: false, message: "テスト送信に失敗しました（サーバー側ログを確認）" });
+    }
+  }
 
   // ===== Push token 登録（サーバー保持）=====
   async function postDeviceRegisterIfNeeded(token) {
@@ -636,15 +689,11 @@ export default function App() {
   }
 
   // ===== Push購読 =====
-  /**
-   * ここは「ユーザー操作（クリック）」から呼ぶ前提。
-   * Android Chromeの事故を避けるため、requestPermission は user gesture でのみ実行する。
-   */
   async function ensurePushSubscribedByClick() {
     if (!("serviceWorker" in navigator)) throw new Error("This browser does not support Service Worker.");
     if (!("Notification" in window)) throw new Error("This browser does not support Notification.");
 
-    // SW登録（あなたの mt.qui2.net では直下に firebase-messaging-sw.js がある前提）
+    // SW登録（mt.qui2.net 直下に firebase-messaging-sw.js がある前提）
     const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
 
     const perm = await Notification.requestPermission();
@@ -662,9 +711,6 @@ export default function App() {
     return token;
   }
 
-  /**
-   * 設定画面の「通知を許可する」ボタンから呼ぶ（ワンクリック直後）
-   */
   async function requestPushPermissionAndRegister() {
     try {
       const token = await ensurePushSubscribedByClick();
@@ -673,7 +719,6 @@ export default function App() {
       setFcmToken(token);
       localStorage.setItem(STORAGE_FCM_TOKEN, token);
 
-      // サーバーへ登録（差分があれば送る）
       await postDeviceRegisterIfNeeded(token);
 
       // 互換のため（UI表示用にON扱い）
@@ -684,48 +729,6 @@ export default function App() {
     }
   }
 
-  
-  async function sendTestPush(delaySec = 5) {
-    const apiBase = getApiBase();
-    if (!apiBase) {
-      alert("サーバーAPIが未設定です（VITE_API_BASE）。");
-      return;
-    }
-    const token = String(fcmToken || "").trim();
-    if (!token) {
-      alert("FCMトークンが未取得です。先に「通知を許可する」を実行してください。");
-      return;
-    }
-    const anonUserId = ensureAnonUserId();
-
-    try {
-      const res = await fetch(`${apiBase}/push/test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          anon_user_id: anonUserId,
-          token,
-          delay_sec: delaySec,
-          // タップ先（通知クリック）: 通知一覧へ
-          url: `${window.location.origin}${window.location.pathname}#notifications`,
-        }),
-      });
-      if (!res.ok) throw new Error(`push/test failed: ${res.status}`);
-      const j = await res.json().catch(() => ({}));
-      console.log("[push/test] ok", j);
-      alert(`テスト通知を予約しました（${delaySec}秒後）`);
-    } catch (e) {
-      console.error("[push/test] error", e);
-      alert(`テスト通知に失敗しました: ${String(e?.message || e)}`);
-    }
-  }
-
-
-/**
-   * 起動時：permission=granted なら「静かに token 再取得」
-   * tokenが変わっていれば保存・サーバー再送（差分で判定）
-   * ※ここでは requestPermission は呼ばない（ダイアログを出さない）
-   */
   useEffect(() => {
     let alive = true;
 
@@ -750,10 +753,8 @@ export default function App() {
           localStorage.setItem(STORAGE_FCM_TOKEN, token);
         }
 
-        // 差分があればサーバーへ
         await postDeviceRegisterIfNeeded(token);
 
-        // 互換（permissionがgrantedならON扱い）
         setSettings((p) => ({ ...p, notificationsEnabled: true }));
       } catch (e) {
         console.log("[FCM silent refresh skipped]", e);
@@ -771,7 +772,6 @@ export default function App() {
     setOpenVenues((prev) => ({ ...prev, [venueKey]: !prev[venueKey] }));
   }
 
-  // 会場ON/OFF（FREE上限対応：残枠分だけON）
   function setVenueAll(venue, on) {
     setToggled((prev) => {
       const next = { ...prev };
@@ -797,66 +797,60 @@ export default function App() {
   }
 
   // 個別トグル（FREE上限対応）
-function toggleRace(raceKey) {
-  const anonUserId = ensureAnonUserId();
-  const race = raceMap.get(raceKey);
+  function toggleRace(raceKey) {
+    const anonUserId = ensureAnonUserId();
+    const race = raceMap.get(raceKey);
 
-  // PROのときだけ2本目タイマーを許可（あなたの既存ロジックに合わせる）
-  const timer2Allowed = maxNotifications >= 999; // 例: FREE=10 / PRO=999想定
-  // ↑もし別のPRO判定変数があるなら、それを使う方がより確実
+    setToggled((prev) => {
+      const next = { ...prev };
 
-  setToggled((prev) => {
-    const next = { ...prev };
+      // OFF
+      if (next[raceKey]) {
+        delete next[raceKey];
 
-    // OFF
-    if (next[raceKey]) {
-      delete next[raceKey];
+        postSubscriptionSetToServer({
+          anon_user_id: anonUserId,
+          race_key: raceKey,
+          enabled: false,
+        });
 
-      postSubscriptionSetToServer({
-        anon_user_id: anonUserId,
-        race_key: raceKey,
-        enabled: false,
-      });
+        return next;
+      }
+
+      // ON（上限チェック）
+      const currentCount = Object.keys(next).length;
+      if (currentCount >= maxNotifications) {
+        alert(`通知は最大 ${maxNotifications} 件までです。`);
+        return next;
+      }
+
+      next[raceKey] = true;
+
+      // ON時に必要データが無ければ送らない（JSON未取得など）
+      if (race) {
+        const t1 = Number(settings.timer1MinutesBefore);
+        const t2 = Number(settings.timer2MinutesBefore);
+
+        const payload = {
+          anon_user_id: anonUserId,
+          race_key: raceKey,
+          enabled: true,
+          closed_at_hhmm: race.closedAtHHMM, // 締切（HH:MM）
+          race_url: race.url, // 通知タップ先の元URL（JSON由来）
+          title: `${race.venueName}${race.raceNo}R`,
+          timer1_min: Number.isFinite(t1) ? t1 : 5,
+
+          // ★ 2本目は「資格あり + UIでON」の時だけ true
+          timer2_enabled: !!timer2Active,
+          timer2_min: Number.isFinite(t2) ? t2 : 1,
+        };
+
+        postSubscriptionSetToServer(payload);
+      }
 
       return next;
-    }
-
-    // ON（上限チェック）
-    const currentCount = Object.keys(next).length;
-    if (currentCount >= maxNotifications) {
-      alert(`通知は最大 ${maxNotifications} 件までです。`);
-      return next;
-    }
-
-    next[raceKey] = true;
-
-    // ON時に必要データが無ければ送らない（JSON未取得など）
-    if (race) {
-      const t1 = Number(settings.timer1MinutesBefore);
-      const t2EnabledUI = !!(timer2Active && settings.timer2Enabled);
-      const t2 = Number(settings.timer2MinutesBefore);
-
-      const payload = {
-        anon_user_id: anonUserId,
-        race_key: raceKey,
-        enabled: true,
-        closed_at_hhmm: race.closedAtHHMM, // 締切（HH:MM）
-        race_url: race.url,                // 通知タップ先の元URL（JSON由来）
-        title: `${race.venueName}${race.raceNo}R`, // 例: 青森1R
-        timer1_min: Number.isFinite(t1) ? t1 : 5,
-
-        // ★ FREEなら強制的にfalseにする
-        timer2_enabled: timer2Allowed ? t2EnabledUI : false,
-        timer2_min: Number.isFinite(t2) ? t2 : 1,
-      };
-
-      postSubscriptionSetToServer(payload);
-    }
-
-    return next;
-  });
-}
-
+    });
+  }
 
   function openLinkForRace(race) {
     const url = getLinkUrl(settings.linkTarget, race.url);
@@ -877,8 +871,6 @@ function toggleRace(raceKey) {
 
   // ===== 共通ヘッダー =====
   function Header({ rightHomeIcon }) {
-    // rightHomeIcon: "notifications" なら☰（通知一覧へ）
-    // rightHomeIcon: "home" なら⌂（HOMEへ）
     return (
       <header style={styles.header}>
         <div style={styles.headerTop}>
@@ -945,9 +937,7 @@ function toggleRace(raceKey) {
           timer2Active={timer2Active}
           onBack={() => setHash("home")}
           onRemoveRaceKey={removeNotification}
-          onOpenLink={({ url }) =>
-            window.open(getLinkUrl(settings.linkTarget, url), "_blank", "noopener,noreferrer")
-          }
+          onOpenLink={({ url }) => window.open(getLinkUrl(settings.linkTarget, url), "_blank", "noopener,noreferrer")}
         />
 
         {settingsOpen && (
@@ -955,15 +945,16 @@ function toggleRace(raceKey) {
             onClose={() => setSettingsOpen(false)}
             settings={settings}
             setSettings={setSettings}
-            isPro={isPro}
-            proState={proState}
-            maxNotifications={maxNotifications}
-            timer2Allowed={timer2Allowed}
-            selectedCount={selectedCount}
-            setToggled={setToggled}
             fcmToken={fcmToken}
             onRequestPushPermission={requestPushPermissionAndRegister}
-            onTestPush={sendTestPush}
+            onSendTestPush={sendTestPushAfter5s}
+            testPushState={testPushState}
+            proState={proState}
+            onVerifyProCode={verifyProCodeNow}
+            maxNotifications={maxNotifications}
+            selectedCount={selectedCount}
+            timer2GateOpen={timer2GateOpen}
+            setToggled={setToggled}
           />
         )}
       </div>
@@ -1091,15 +1082,16 @@ function toggleRace(raceKey) {
           onClose={() => setSettingsOpen(false)}
           settings={settings}
           setSettings={setSettings}
-          isPro={isPro}
-          proState={proState}
-          maxNotifications={maxNotifications}
-          timer2Allowed={timer2Allowed}
-          selectedCount={selectedCount}
-          setToggled={setToggled}
           fcmToken={fcmToken}
           onRequestPushPermission={requestPushPermissionAndRegister}
-            onTestPush={sendTestPush}
+          onSendTestPush={sendTestPushAfter5s}
+          testPushState={testPushState}
+          proState={proState}
+          onVerifyProCode={verifyProCodeNow}
+          maxNotifications={maxNotifications}
+          selectedCount={selectedCount}
+          timer2GateOpen={timer2GateOpen}
+          setToggled={setToggled}
         />
       )}
     </div>
@@ -1111,17 +1103,17 @@ function SettingsModal({
   onClose,
   settings,
   setSettings,
-  isPro,
-  proState,
-  maxNotifications,
-  timer2Allowed,
-  selectedCount,
-  setToggled,
   fcmToken,
-  onRequestPushPermission, // ★ワンクリック直後に権限要求するための関数
+  onRequestPushPermission,
+  onSendTestPush,
+  testPushState,
+  proState,
+  onVerifyProCode,
+  maxNotifications,
+  selectedCount,
+  timer2GateOpen,
+  setToggled,
 }) {
-  const canUseTimer2 = isPro && timer2Allowed;
-
   const canRequest = (() => {
     try {
       return "Notification" in window && "serviceWorker" in navigator;
@@ -1138,18 +1130,35 @@ function SettingsModal({
     }
   })();
 
+  const canTest = !!fcmToken && permission === "granted" && !!onSendTestPush;
+
+  const proPeriodLabel = String(proState?.period || "");
+  const proStatusLabel = String(proState?.message || "");
+
+  const timer2EnabledUI = !!settings.timer2Enabled;
+  const timer2ToggleDisabled = !timer2GateOpen;
+
+  function resetAllSelections() {
+    // toggledをクリア（通知解除）
+    setToggled?.({});
+    // UI互換のためのフラグ（必要なら使う）
+    setSettings((s) => ({ ...s, __resetAll: Date.now() }));
+  }
+
   return (
     <div className="modalBack" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modalHead">
+        <div className="modalHead settingsHeader">
           <div className="modalTitle">設定</div>
-          <button className="iconBtn" onClick={onClose} aria-label="close">
-            ✕
-          </button>
+          <div className="settingsHeaderRight">
+            <button type="button" className="iconBtn closeBtn" onClick={onClose} aria-label="close">
+              ✕
+            </button>
+          </div>
         </div>
 
         <div className="modalBody">
-          {/* Push通知：トグル廃止 → ボタンのみ */}
+          {/* Push通知 */}
           <div className="row">
             <div className="label">Push通知</div>
 
@@ -1160,25 +1169,29 @@ function SettingsModal({
                 </div>
               ) : permission === "granted" ? (
                 <div className="pushGrantRow">
-  <div className="pushGrantLeft">許可済み</div>
-  <div className="pushGrantRight">
-    <div className="pushGrantOn">ON</div>
-    <button
-      type="button"
-      className="btn btnSmall testBtn"
-      onClick={() => onTestPush?.(5)}
-      title="5秒後にテスト通知"
-    >
-      テスト（5秒後）
-    </button>
-  </div>
-</div>
+                  <div className="pushGrantLeft">
+                    <div style={{ fontWeight: 900 }}>許可済み</div>
+                  </div>
+
+                  <div className="pushGrantRight">
+                    <div style={{ fontWeight: 900, letterSpacing: 0.2 }}>ON</div>
+                    <button
+                      type="button"
+                      className="btn small pushTestBtn"
+                      onClick={() => onSendTestPush?.(fcmToken)}
+                      disabled={!canTest || !!testPushState?.loading}
+                      title="5秒後にテスト通知を鳴らします"
+                    >
+                      {testPushState?.loading ? "送信中…" : "テスト（5秒後）"}
+                    </button>
+                  </div>
+                </div>
               ) : permission === "denied" ? (
                 <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.6 }}>
                   ブロックされています。Chromeの「サイトの設定」→「通知」を許可に変更してください。
                 </div>
               ) : (
-                <button className="btn" onClick={onRequestPushPermission}>
+                <button type="button" className="btn" onClick={onRequestPushPermission}>
                   通知を許可する
                 </button>
               )}
@@ -1197,6 +1210,10 @@ function SettingsModal({
               <div style={{ fontSize: 12, opacity: 0.9 }}>
                 token: {fcmToken ? <code>{formatTokenShort(fcmToken)}</code> : "未取得"}
               </div>
+
+              {testPushState?.message ? (
+                <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.4 }}>{testPushState.message}</div>
+              ) : null}
             </div>
           </div>
 
@@ -1204,58 +1221,59 @@ function SettingsModal({
           <div className="row">
             <div className="label">1つ目タイマー</div>
             <select
-              value={settings.timer1MinutesBefore}
-              onChange={(e) => setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))}
+              value={String(settings.timer1MinutesBefore)}
+              onChange={(e) => setSettings((s) => ({ ...s, timer1MinutesBefore: e.target.value }))}
             >
-              {MINUTE_OPTIONS.map((m) => (
-                <option key={m} value={m}>
+              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (
+                <option key={m} value={String(m)}>
                   {m} 分前
                 </option>
               ))}
             </select>
           </div>
 
-          {/* 2つ目タイマー（スイッチ） */}
+          {/* 2つ目タイマー */}
           <div className="row">
             <div className="label">2つ目タイマー</div>
-
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
               <label className="toggle">
                 <input
                   type="checkbox"
                   checked={!!settings.timer2Enabled}
-                  onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
-                  disabled={!canUseTimer2}
+                  onChange={(e) => setSettings((s) => ({ ...s, timer2Enabled: e.target.checked }))}
+                  disabled={timer2ToggleDisabled}
                 />
                 <span className="slider" />
               </label>
-
-              <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>{settings.timer2Enabled ? "ON" : "OFF"}</div>
+              <div style={{ opacity: timer2GateOpen ? 1 : 0.7, fontWeight: 800 }}>
+                {timer2EnabledUI ? "ON" : "OFF"}
+              </div>
             </div>
-
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75 }}>PRO版で解放</div>
+            {!timer2GateOpen ? <div className="hint">PRO版で解放</div> : null}
           </div>
 
-          {/* 2回目（分前） */}
           <div className="row">
             <div className="label">2回目（分前）</div>
             <select
-              value={settings.timer2MinutesBefore}
-              disabled={!canUseTimer2 || !settings.timer2Enabled}
-              onChange={(e) => setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))}
+              value={String(settings.timer2MinutesBefore)}
+              onChange={(e) => setSettings((s) => ({ ...s, timer2MinutesBefore: e.target.value }))}
+              disabled={!timer2GateOpen || !settings.timer2Enabled}
             >
-              {MINUTE_OPTIONS.map((m) => (
-                <option key={m} value={m}>
+              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (
+                <option key={m} value={String(m)}>
                   {m} 分前
                 </option>
               ))}
             </select>
           </div>
 
-          {/* 通知タップ先 */}
+          {/* 通知タップ先（LINK_TARGETSと一致） */}
           <div className="row">
             <div className="label">通知タップ先</div>
-            <select value={settings.linkTarget} onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}>
+            <select
+              value={settings.linkTarget}
+              onChange={(e) => setSettings((s) => ({ ...s, linkTarget: e.target.value }))}
+            >
               {LINK_TARGETS.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.label}
@@ -1264,26 +1282,37 @@ function SettingsModal({
             </select>
           </div>
 
-          {/* 有料コード */}
+          {/* 有料コード（A案：settings.proCode 直結） */}
           <div className="row">
-            <div className="label">有料コード</div>
-            <input
-              value={settings.proCode || ""}
-              onChange={(e) => setSettings((p) => ({ ...p, proCode: e.target.value }))}
-              placeholder="コードを入力"
-            />
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.4 }}>
-              期間：登録日から月末まで（20日を過ぎてからの登録は翌々月の月末まで）
+            <div className="label">コード入力</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              <div className="codeRow">
+                <input
+                  className="codeInput"
+                  value={settings.proCode || ""}
+                  onChange={(e) => setSettings((s) => ({ ...s, proCode: e.target.value }))}
+                  placeholder="コードを入力"
+                />
+                <button
+                  type="button"
+                  className="btn small"
+                  onClick={() => onVerifyProCode?.(settings.proCode)}
+                  disabled={!!proState?.loading}
+                >
+                  {proState?.loading ? "送信中…" : "送信"}
+                </button>
+              </div>
+              <div className="codeMeta">
+                <div style={{ fontSize: 12, opacity: 0.85 }}>期間：{proPeriodLabel || "—"}</div>
+                <div style={{ fontSize: 12, opacity: 0.85 }}>{proStatusLabel || ""}</div>
+              </div>
             </div>
-            {proState?.verified && proState?.message ? (
-              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>{proState.message}</div>
-            ) : null}
           </div>
 
           {/* 通知上限 */}
           <div className="row">
             <div className="label">通知上限</div>
-            <div style={{ gridColumn: "2 / 3", fontSize: 14 }}>
+            <div style={{ fontWeight: 800 }}>
               現在：{selectedCount} 件 / 上限：{maxNotifications} 件
             </div>
           </div>
@@ -1291,15 +1320,17 @@ function SettingsModal({
           {/* 選択のリセット */}
           <div className="row">
             <div className="label">選択のリセット</div>
-            <button className="btn danger" onClick={() => setToggled({})}>
-              すべて解除
-            </button>
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>現在の通知数：{selectedCount}</div>
+            <div style={{ display: "grid", gap: 8 }}>
+              <button type="button" className="btn danger" onClick={resetAllSelections}>
+                すべて解除
+              </button>
+              <div style={{ fontSize: 12, opacity: 0.7 }}>現在の通知数：{selectedCount}</div>
+            </div>
           </div>
         </div>
 
         <div className="modalFoot">
-          <button className="btn" onClick={onClose}>
+          <button type="button" className="btn" onClick={onClose}>
             閉じる
           </button>
         </div>
@@ -1433,6 +1464,7 @@ input{ width: 100%; }
   cursor: pointer;
   font-weight: 900;
 }
+.btn.small{ padding: 8px 10px; font-size: 12px; border-radius: 12px; }
 .btn.danger{
   border-color: rgba(220,0,0,0.22);
   background: rgba(255,240,240,0.9);
@@ -1652,9 +1684,9 @@ input{ width: 100%; }
   inset: 0;
   background: rgba(0,0,0,0.35);
   display:flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: 16px;
+  padding: 24px 16px 16px;
   z-index: 50;
 }
 .modal{
@@ -1664,6 +1696,10 @@ input{ width: 100%; }
   border: 1px solid rgba(0,0,0,0.10);
   box-shadow: 0 18px 40px rgba(0,0,0,0.22);
   overflow: hidden;
+
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
 }
 .modalHead{
   display:flex;
@@ -1678,6 +1714,8 @@ input{ width: 100%; }
   padding: 12px;
   display:grid;
   gap: 10px;
+  overflow: auto;
+  min-height: 0;
 }
 .modalFoot{
   padding: 12px;
@@ -1696,35 +1734,72 @@ input{ width: 100%; }
   font-weight: 900;
   opacity: 0.80;
 }
+.hint{
+  margin-top: 6px;
+  font-size: 12px;
+  opacity: 0.72;
+}
 @media (max-width: 560px){
   .row{ grid-template-columns: 1fr; }
   .venueName{ max-width: 58vw; }
 }
-`;
 
-
-/* --- Push 設定ヘッダー（クリック阻害対策） --- */
+/* ===== Push: 許可済み行 ===== */
 .pushGrantRow{
   display:flex;
   align-items:center;
   justify-content: space-between;
   gap: 12px;
-  position: relative;
-  z-index: 1000; /* モーダル内の重なりでクリックが奪われるのを防ぐ */
 }
-.pushGrantLeft{ font-weight: 900; }
+.pushGrantLeft{ flex: 0 0 auto; }
 .pushGrantRight{
   display:flex;
   align-items:center;
   gap: 10px;
+  flex: 0 0 auto;
   position: relative;
-  z-index: 1001;
+  z-index: 10000;
 }
-.pushGrantOn{ font-weight: 900; letter-spacing: 0.2px; }
-.btnSmall{ padding: 8px 12px; font-size: 12px; border-radius: 999px; }
-.testBtn{ pointer-events: auto; }
+.pushTestBtn{
+  pointer-events: auto !important;
+  position: relative;
+  z-index: 10001;
+}
 
-/* --- モーダルの閉じるボタンが上すぎる対策 --- */
-.modalHead{ padding-top: 18px; }
-.iconBtn{ margin-top: 2px; }
+/* ===== 設定モーダル上部：クリック阻害対策 ===== */
+.settingsHeader,
+.settingsHeaderRight{
+  position: relative;
+  z-index: 9999;
+}
+.settingsHeaderRight button{
+  position: relative;
+  z-index: 10000;
+  pointer-events: auto;
+}
 
+/* ===== コード入力行 ===== */
+.codeRow{
+  display:flex;
+  gap: 10px;
+  align-items:center;
+}
+.codeInput{
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.codeMeta{
+  margin-top: 8px;
+  display:grid;
+  gap: 4px;
+}
+
+/* 閉じるボタン微調整 */
+.closeBtn{
+  margin-top: 4px;
+}
+
+.modalBack{ pointer-events:auto; }
+.modal{ pointer-events:auto; }
+.modal *{ pointer-events:auto; }
+`;
