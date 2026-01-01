@@ -1028,6 +1028,7 @@ useEffect(() => {
             onSendTestPush={sendTestPushAfter5s}
             testPushState={testPushState}
             proState={proState}
+            isPro={isPro}              // ← ★ 追加
             onVerifyProCode={verifyProCodeNow}
             maxNotifications={maxNotifications}
             selectedCount={selectedCount}
@@ -1186,6 +1187,7 @@ function SettingsModal({
   onSendTestPush,
   testPushState,
   proState,
+  isPro,              // ← ★ 追加
   onVerifyProCode,
   maxNotifications,
   selectedCount,
