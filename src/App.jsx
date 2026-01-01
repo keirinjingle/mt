@@ -57,8 +57,9 @@ function setHash(route) {
 }
 
 function getApiBase() {
-  const base = (import.meta?.env?.VITE_API_BASE || "").trim();
-  return base ? base.replace(/\/$/, "") : "";
+  const base = (import.meta?.env?.VITE_API_BASE || "").trim().replace(/\/$/, "");
+  // env未設定でも、本番(=同一オリジン)なら /api に送る
+  return base || `${window.location.origin}/api`;
 }
 
 
@@ -241,19 +242,23 @@ async function trySendRemoveToServer({ anonUserId, raceKey }) {
 
 async function postSubscriptionSetToServer(payload) {
   const apiBase = getApiBase();
-  if (!apiBase) return;
-
   try {
     const res = await fetch(`${apiBase}/subscriptions/set`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error(`subscriptions/set failed: ${res.status}`);
+
+    const text = await res.text(); // ←重要（失敗理由が見える）
+    if (!res.ok) throw new Error(`subscriptions/set failed: ${res.status} body=${text}`);
+
+    // 成功時も一旦ログ（確認できたら消してOK）
+    console.log("[subscriptions/set] ok", payload, text);
   } catch (e) {
-    console.warn("[subscriptions/set] failed", e);
+    console.warn("[subscriptions/set] failed", e, payload);
   }
 }
+
 
 
 /* ===== ページ：通知一覧 ===== */
@@ -804,7 +809,7 @@ function toggleRace(raceKey) {
         race_key: raceKey,
         enabled: true,
         closed_at_hhmm: race.closedAtHHMM, // 締切（HH:MM）
-        race_url: race.url,                // 通知タップ先の元URL（JSON由来）
+        race_url: race.url || `${window.location.origin}/#notifications`,
         title: `${race.venueName}${race.raceNo}R`, // 例: 青森1R
         timer1_min: Number.isFinite(t1) ? t1 : 5,
 
