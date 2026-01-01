@@ -553,7 +553,6 @@ export default function App() {
         maxNotifications,
         timer2Allowed,
         adsOff,
-        period: String(data?.period || data?.period_text || data?.valid_until || ""),
         message: String(data?.message || ""),
       });
 
@@ -599,49 +598,7 @@ export default function App() {
 
   const timer2Active = isPro && timer2Allowed && !!settings.timer2Enabled;
 
-  
-  // ===== Push テスト送信（5秒後に鳴らす）=====
-  const [testPushState, setTestPushState] = useState({ loading: false, message: "" });
-
-  async function sendTestPushAfter5s(token) {
-    const apiBase = getApiBase();
-    if (!apiBase) {
-      setTestPushState({ loading: false, message: "API未設定のためテストできません（VITE_API_BASE）" });
-      return;
-    }
-    const anonUserId = ensureAnonUserId();
-    const t = String(token || "").trim();
-    if (!t) {
-      setTestPushState({ loading: false, message: "token が未取得です" });
-      return;
-    }
-
-    setTestPushState({ loading: true, message: "テスト送信を依頼しました（5秒後に鳴るはず）…" });
-    try {
-      const res = await fetch(`${apiBase}/push/test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          anon_user_id: anonUserId,
-          token: t,
-          delay_sec: 5,
-          // 通知タップで戻る先（必要ならサーバー側で上書きしてOK）
-          url: `${window.location.origin}/#notifications`,
-        }),
-      });
-      if (!res.ok) throw new Error(`test push failed: ${res.status}`);
-      const data = await res.json().catch(() => ({}));
-      setTestPushState({
-        loading: false,
-        message: String(data?.message || "OK（5秒後に通知が来なければ端末側/FCM側の問題切り分けへ）"),
-      });
-    } catch (e) {
-      console.error("[test push error]", e);
-      setTestPushState({ loading: false, message: "テスト送信に失敗しました（サーバー側ログを確認）" });
-    }
-  }
-
-// ===== Push token 登録（サーバー保持）=====
+  // ===== Push token 登録（サーバー保持）=====
   async function postDeviceRegisterIfNeeded(token) {
     const apiBase = getApiBase();
     if (!apiBase) return;
@@ -727,7 +684,44 @@ export default function App() {
     }
   }
 
-  /**
+  
+  async function sendTestPush(delaySec = 5) {
+    const apiBase = getApiBase();
+    if (!apiBase) {
+      alert("サーバーAPIが未設定です（VITE_API_BASE）。");
+      return;
+    }
+    const token = String(fcmToken || "").trim();
+    if (!token) {
+      alert("FCMトークンが未取得です。先に「通知を許可する」を実行してください。");
+      return;
+    }
+    const anonUserId = ensureAnonUserId();
+
+    try {
+      const res = await fetch(`${apiBase}/push/test`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          anon_user_id: anonUserId,
+          token,
+          delay_sec: delaySec,
+          // タップ先（通知クリック）: 通知一覧へ
+          url: `${window.location.origin}${window.location.pathname}#notifications`,
+        }),
+      });
+      if (!res.ok) throw new Error(`push/test failed: ${res.status}`);
+      const j = await res.json().catch(() => ({}));
+      console.log("[push/test] ok", j);
+      alert(`テスト通知を予約しました（${delaySec}秒後）`);
+    } catch (e) {
+      console.error("[push/test] error", e);
+      alert(`テスト通知に失敗しました: ${String(e?.message || e)}`);
+    }
+  }
+
+
+/**
    * 起動時：permission=granted なら「静かに token 再取得」
    * tokenが変わっていれば保存・サーバー再送（差分で判定）
    * ※ここでは requestPermission は呼ばない（ダイアログを出さない）
@@ -969,9 +963,7 @@ function toggleRace(raceKey) {
             setToggled={setToggled}
             fcmToken={fcmToken}
             onRequestPushPermission={requestPushPermissionAndRegister}
-            onSendTestPush={sendTestPushAfter5s}
-            testPushState={testPushState}
-            onVerifyProCode={verifyProCodeNow}
+            onTestPush={sendTestPush}
           />
         )}
       </div>
@@ -1107,6 +1099,7 @@ function toggleRace(raceKey) {
           setToggled={setToggled}
           fcmToken={fcmToken}
           onRequestPushPermission={requestPushPermissionAndRegister}
+            onTestPush={sendTestPush}
         />
       )}
     </div>
@@ -1126,10 +1119,6 @@ function SettingsModal({
   setToggled,
   fcmToken,
   onRequestPushPermission, // ★ワンクリック直後に権限要求するための関数
-  onSendTestPush,          // ★5秒後テスト通知
-  testPushState,           // ★テスト送信状態
-  onVerifyProCode,         // ★有料コードの検証（送信ボタン）
-
 }) {
   const canUseTimer2 = isPro && timer2Allowed;
 
@@ -1148,11 +1137,6 @@ function SettingsModal({
       return "unsupported";
     }
   })();
-
-  // 「コード入力」は入力中は settings に反映せず、送信で確定
-  const [proCodeDraft, setProCodeDraft] = useState(() => String(settings.proCode || ""));
-  const [proCodeUiMsg, setProCodeUiMsg] = useState("");
-
 
   return (
     <div className="modalBack" onClick={onClose}>
@@ -1175,21 +1159,20 @@ function SettingsModal({
                   この端末/ブラウザでは Push通知が利用できません。
                 </div>
               ) : permission === "granted" ? (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-                  <div style={{ fontWeight: 900 }}>許可済み</div>
-
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <div style={{ fontWeight: 900, letterSpacing: 0.2 }}>ON</div>
-                    <button
-                      className="btn small"
-                      onClick={() => onSendTestPush?.(fcmToken)}
-                      disabled={!fcmToken || testPushState?.loading}
-                      title="5秒後にテスト通知を鳴らします"
-                    >
-                      {testPushState?.loading ? "送信中…" : "テスト（5秒後）"}
-                    </button>
-                  </div>
-                </div>
+                <div className="pushGrantRow">
+  <div className="pushGrantLeft">許可済み</div>
+  <div className="pushGrantRight">
+    <div className="pushGrantOn">ON</div>
+    <button
+      type="button"
+      className="btn btnSmall testBtn"
+      onClick={() => onTestPush?.(5)}
+      title="5秒後にテスト通知"
+    >
+      テスト（5秒後）
+    </button>
+  </div>
+</div>
               ) : permission === "denied" ? (
                 <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.6 }}>
                   ブロックされています。Chromeの「サイトの設定」→「通知」を許可に変更してください。
@@ -1214,9 +1197,6 @@ function SettingsModal({
               <div style={{ fontSize: 12, opacity: 0.9 }}>
                 token: {fcmToken ? <code>{formatTokenShort(fcmToken)}</code> : "未取得"}
               </div>
-              {testPushState?.message ? (
-                <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.4 }}>{testPushState.message}</div>
-              ) : null}
             </div>
           </div>
 
@@ -1284,47 +1264,23 @@ function SettingsModal({
             </select>
           </div>
 
-          {/* コード入力（有料） */}
+          {/* 有料コード */}
           <div className="row">
-            <div className="label">コード入力</div>
-
-            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-              <input
-                value={proCodeDraft}
-                onChange={(e) => setProCodeDraft(e.target.value)}
-                placeholder="コードを入力"
-                style={{ flex: "1 1 auto" }}
-              />
-              <button
-                className="btn"
-                onClick={() => {
-                  const v = String(proCodeDraft || "").trim();
-                  setSettings((p) => ({ ...p, proCode: v }));
-                  setProCodeUiMsg(v ? "送信しました（検証中…）" : "コードを空にしました（FREE）");
-                  onVerifyProCode?.(v);
-                }}
-                disabled={!!proState?.loading}
-                style={{ whiteSpace: "nowrap" }}
-              >
-                {proState?.loading ? "検証中…" : "送信"}
-              </button>
-            </div>
-
-            {/* 期間（サーバー返却） */}
+            <div className="label">有料コード</div>
+            <input
+              value={settings.proCode || ""}
+              onChange={(e) => setSettings((p) => ({ ...p, proCode: e.target.value }))}
+              placeholder="コードを入力"
+            />
             <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.4 }}>
-              期間：{String(proState?.period || proState?.period_text || proState?.valid_until || "—")}
+              期間：登録日から月末まで（20日を過ぎてからの登録は翌々月の月末まで）
             </div>
-
-            {proCodeUiMsg ? (
-              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>{proCodeUiMsg}</div>
-            ) : null}
-
             {proState?.verified && proState?.message ? (
-              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.85 }}>{proState.message}</div>
+              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>{proState.message}</div>
             ) : null}
           </div>
 
-{/* 通知上限 */}
+          {/* 通知上限 */}
           <div className="row">
             <div className="label">通知上限</div>
             <div style={{ gridColumn: "2 / 3", fontSize: 14 }}>
@@ -1477,7 +1433,6 @@ input{ width: 100%; }
   cursor: pointer;
   font-weight: 900;
 }
-.btn.small{ padding: 8px 10px; font-size: 12px; border-radius: 12px; }
 .btn.danger{
   border-color: rgba(220,0,0,0.22);
   background: rgba(255,240,240,0.9);
@@ -1697,9 +1652,9 @@ input{ width: 100%; }
   inset: 0;
   background: rgba(0,0,0,0.35);
   display:flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  padding: 24px 16px 16px; /* 上に詰まりすぎないよう少し下げる */
+  padding: 16px;
   z-index: 50;
 }
 .modal{
@@ -1709,10 +1664,6 @@ input{ width: 100%; }
   border: 1px solid rgba(0,0,0,0.10);
   box-shadow: 0 18px 40px rgba(0,0,0,0.22);
   overflow: hidden;
-
-  max-height: calc(100vh - 40px);
-  display: flex;
-  flex-direction: column;
 }
 .modalHead{
   display:flex;
@@ -1727,8 +1678,6 @@ input{ width: 100%; }
   padding: 12px;
   display:grid;
   gap: 10px;
-  overflow: auto;
-  min-height: 0;
 }
 .modalFoot{
   padding: 12px;
@@ -1751,31 +1700,31 @@ input{ width: 100%; }
   .row{ grid-template-columns: 1fr; }
   .venueName{ max-width: 58vw; }
 }
-
-/* ===== Push通知ヘッダーのクリック阻害対策（最優先） ===== */
-.settingsHeader,
-.settingsHeaderRight {
-  position: relative;
-  z-index: 9999;
-}
-
-.settingsHeaderRight button {
-  position: relative;
-  z-index: 10000;
-  pointer-events: auto;
-}
-
-/* もしモーダル内に透明レイヤーが残っていたら無効化する */
-.modalBody,
-.modalHeader {
-  position: relative;
-  z-index: 1;
-}
-
-/* ボタンのクリックが奪われることがある要素を抑止（説明文など） */
-.settingsHeaderNote {
-  pointer-events: none;
-}
-
 `;
+
+
+/* --- Push 設定ヘッダー（クリック阻害対策） --- */
+.pushGrantRow{
+  display:flex;
+  align-items:center;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative;
+  z-index: 1000; /* モーダル内の重なりでクリックが奪われるのを防ぐ */
+}
+.pushGrantLeft{ font-weight: 900; }
+.pushGrantRight{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  position: relative;
+  z-index: 1001;
+}
+.pushGrantOn{ font-weight: 900; letter-spacing: 0.2px; }
+.btnSmall{ padding: 8px 12px; font-size: 12px; border-radius: 999px; }
+.testBtn{ pointer-events: auto; }
+
+/* --- モーダルの閉じるボタンが上すぎる対策 --- */
+.modalHead{ padding-top: 18px; }
+.iconBtn{ margin-top: 2px; }
 
