@@ -3,33 +3,42 @@ import { getToken, onMessage } from "firebase/messaging";
 import { messaging, VAPID_KEY } from "./firebase";
 
 /**
- * もふタイマー Web（最小・全部入り / 1ファイル）
+ * もふタイマー Web（Push通知対応 / 1ファイル App.jsx）
  * - Vite + React
  * - 本番: mt.qui2.net 直下配信
  * - 当日のみ（GitHub Pages上のJSON）
- * - 会場アコーディオン + レース行トグル（1つ）
+ * - 会場アコーディオン + レース行トグル（通知選択）
  *
  * 追加:
  * - Hash Routing: #notifications で通知一覧ページ
  * - 通知一覧から削除（localStorage更新 + 可能ならサーバーへ通知）
- * - ヘッダーに通知ON/OFF（Push購読）※現在は「設定モーダルのみ」に寄せる方針でもOK（UI配置はここでは無し）
+ * - Push通知は「設定画面の許可ボタン」だけで権限要求（Android事故回避）
+ * - token は localStorage に保持し、起動時に permission=granted なら token 再取得→差分があればサーバーへ再送
  * - PRO（有料コード）をAPIで検証（サーバー管理）
- *   - 通知上限（FREE=10など）/ 2つ目タイマー / 広告OFF をサーバーの返答で制御
  *
  * サーバー側想定API:
- * POST {VITE_API_BASE}/pro/verify
- *   body: { anon_user_id: string, pro_code: string }
- *   resp例:
- *     {
- *       ok: true,
- *       pro: true,
- *       max_notifications: 999,   // 未指定なら既定(PRO=999, FREE=10)
- *       timer2_allowed: true,     // 未指定なら既定(PRO=true, FREE=false)
- *       ads_off: true,            // 未指定なら既定(PRO=true, FREE=false)
- *       message: "optional"
- *     }
+ * 1) PRO検証
+ *   POST {VITE_API_BASE}/pro/verify
+ *     body: { anon_user_id: string, pro_code: string }
+ *     resp例:
+ *       {
+ *         ok: true,
+ *         pro: true,
+ *         max_notifications: 999,   // 未指定なら既定(PRO=999, FREE=10)
+ *         timer2_allowed: true,     // 未指定なら既定(PRO=true, FREE=false)
+ *         ads_off: true,            // 未指定なら既定(PRO=true, FREE=false)
+ *         message: "optional"
+ *       }
  *
- * ※ VITE_API_BASE が空なら、常にFREE扱い（PROは無効）にします。
+ * 2) token登録（サーバーが token を保持して送る前提）
+ *   POST {VITE_API_BASE}/devices/register
+ *     body: { anon_user_id, token, platform, ua, origin, ts }
+ *
+ * 3) 通知削除（任意）
+ *   POST {VITE_API_BASE}/notifications/remove
+ *     body: { anon_user_id, race_key }
+ *
+ * ※ VITE_API_BASE が空なら、常にFREE扱い（PRO無効）+ token登録APIも呼びません。
  */
 
 const APP_TITLE = "もふタイマー";
@@ -53,18 +62,21 @@ const MINUTE_OPTIONS = [5, 4, 3, 2, 1];
 const STORAGE_USER_ID = "mofu_anon_user_id";
 const STORAGE_OPEN_VENUES = "mofu_open_venues_v1";
 const STORAGE_TOGGLED = "mofu_race_toggled_v1";
-const STORAGE_SETTINGS = "mofu_settings_v4"; // v3→v4（PRO検証状態を含めたいので）
+const STORAGE_SETTINGS = "mofu_settings_v4";
+
+/** token関連（端末保存 + サーバーへ送った最後のtoken） */
+const STORAGE_FCM_TOKEN = "mofu_fcm_token_v1";
+const STORAGE_FCM_TOKEN_SENT = "mofu_fcm_token_sent_v1";
+const STORAGE_FCM_TOKEN_SENT_AT = "mofu_fcm_token_sent_at_v1";
 
 const DEFAULT_SETTINGS = {
   timer1MinutesBefore: 5,
   timer2Enabled: false,
   timer2MinutesBefore: 2,
   linkTarget: "json",
-
-  // 入力値（ユーザーが入れる）
   proCode: "",
 
-  // 通知ON/OFF（Push購読）
+  // 互換のため保持（UIはボタン方式で permission を優先）
   notificationsEnabled: false,
 };
 
@@ -138,6 +150,12 @@ function ensureAnonUserId() {
   localStorage.setItem(STORAGE_USER_ID, uuid);
   return uuid;
 }
+function formatTokenShort(token) {
+  const t = String(token || "");
+  if (!t) return "";
+  if (t.length <= 18) return t;
+  return `${t.slice(0, 8)}...${t.slice(-6)}`;
+}
 
 /* ===== JSON fetch ===== */
 async function fetchRacesJson(mode) {
@@ -163,9 +181,7 @@ function normalizeToVenues(raw, mode) {
     return list.map((v) => {
       const venueName = v.venue || v.venueName || v.name || "会場";
       const venueKey = `${mode}_${venueName}`;
-      const races = (v.races || []).map((r, ri) =>
-        normalizeRace(r, mode, { venueName, venueKey }, ri)
-      );
+      const races = (v.races || []).map((r, ri) => normalizeRace(r, mode, { venueName, venueKey }, ri));
       return {
         venueKey,
         venueName,
@@ -204,10 +220,10 @@ function computeNotifyAt(race, minutesBefore) {
 }
 
 async function trySendRemoveToServer({ anonUserId, raceKey }) {
-  const apiBase = (import.meta?.env?.VITE_API_BASE || "").trim();
+  const apiBase = (import.meta?.env?.VITE_API_BASE || "").trim().replace(/\/$/, "");
   if (!apiBase) return;
   try {
-    await fetch(`${apiBase.replace(/\/$/, "")}/notifications/remove`, {
+    await fetch(`${apiBase}/notifications/remove`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ anon_user_id: anonUserId, race_key: raceKey }),
@@ -218,15 +234,7 @@ async function trySendRemoveToServer({ anonUserId, raceKey }) {
 }
 
 /* ===== ページ：通知一覧 ===== */
-function NotificationsPage({
-  venues,
-  toggled,
-  settings,
-  timer2Active,
-  onBack,
-  onRemoveRaceKey,
-  onOpenLink,
-}) {
+function NotificationsPage({ venues, toggled, settings, timer2Active, onBack, onRemoveRaceKey, onOpenLink }) {
   const raceMap = useMemo(() => {
     const m = new Map();
     for (const v of venues) for (const r of v.races) m.set(r.raceKey, r);
@@ -240,6 +248,7 @@ function NotificationsPage({
     for (const rk of selectedRaceKeys) {
       const r = raceMap.get(rk);
       if (!r) continue;
+
       const n1 = computeNotifyAt(r, settings.timer1MinutesBefore);
       const n2 = timer2Active ? computeNotifyAt(r, settings.timer2MinutesBefore) : null;
 
@@ -254,10 +263,12 @@ function NotificationsPage({
         n2,
       });
     }
+
     list.sort((a, b) => {
       if (a.venueName !== b.venueName) return a.venueName.localeCompare(b.venueName, "ja");
       return (a.raceNo || 0) - (b.raceNo || 0);
     });
+
     return list;
   }, [selectedRaceKeys, raceMap, settings, timer2Active]);
 
@@ -351,9 +362,7 @@ export default function App() {
   const [openVenues, setOpenVenues] = useState(() =>
     safeJsonParse(localStorage.getItem(STORAGE_OPEN_VENUES) || "{}", {})
   );
-  const [toggled, setToggled] = useState(() =>
-    safeJsonParse(localStorage.getItem(STORAGE_TOGGLED) || "{}", {})
-  );
+  const [toggled, setToggled] = useState(() => safeJsonParse(localStorage.getItem(STORAGE_TOGGLED) || "{}", {}));
 
   const [settings, setSettings] = useState(() => {
     const stored = safeJsonParse(localStorage.getItem(STORAGE_SETTINGS) || "null", null);
@@ -363,8 +372,8 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
-  // Push token（debug用・将来 /devices/register に送る）
-  const [fcmToken, setFcmToken] = useState("");
+  // Push token（表示 & サーバーへ登録するため）
+  const [fcmToken, setFcmToken] = useState(() => localStorage.getItem(STORAGE_FCM_TOKEN) || "");
 
   // PRO状態（サーバー検証結果）
   const [proState, setProState] = useState({
@@ -419,6 +428,9 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem(STORAGE_SETTINGS, JSON.stringify(settings));
   }, [settings]);
+  useEffect(() => {
+    if (fcmToken) localStorage.setItem(STORAGE_FCM_TOKEN, fcmToken);
+  }, [fcmToken]);
 
   // foreground message（開いてる最中にPushが来た時）
   useEffect(() => {
@@ -426,27 +438,22 @@ export default function App() {
       const unsub = onMessage(messaging, (payload) => {
         console.log("[FCM foreground message]", payload);
       });
-      return () => {
-        try {
-          unsub && unsub();
-        } catch {
-          // ignore
-        }
-      };
+      return () => unsub();
     } catch {
-      return;
+      // ignore
     }
   }, []);
 
   const todayLabel = useMemo(() => toYYYYMMDD(new Date()), []);
   const selectedCount = useMemo(() => Object.keys(toggled).length, [toggled]);
 
-  // ===== PRO検証（APIでサーバー管理）=====
-  const verifyTimerRef = useRef(null);
-
+  // ===== API base =====
   function getApiBase() {
     return (import.meta?.env?.VITE_API_BASE || "").trim().replace(/\/$/, "");
   }
+
+  // ===== PRO検証（APIでサーバー管理）=====
+  const verifyTimerRef = useRef(null);
 
   function defaultsFromProFlag(isPro) {
     // サーバーが何も返さない時の保険
@@ -562,14 +569,53 @@ export default function App() {
 
   const timer2Active = isPro && timer2Allowed && !!settings.timer2Enabled;
 
-  // ===== Push購読 =====
-  async function ensurePushSubscribed() {
-    if (!("serviceWorker" in navigator))
-      throw new Error("This browser does not support Service Worker.");
-    if (!("Notification" in window))
-      throw new Error("This browser does not support Notification.");
+  // ===== Push token 登録（サーバー保持）=====
+  async function postDeviceRegisterIfNeeded(token) {
+    const apiBase = getApiBase();
+    if (!apiBase) return;
 
-    // iOS PWA 前提：ここでSW登録（同一オリジン直下）
+    const anonUserId = ensureAnonUserId();
+    const t = String(token || "").trim();
+    if (!t) return;
+
+    const lastSent = localStorage.getItem(STORAGE_FCM_TOKEN_SENT) || "";
+    if (lastSent === t) return; // 差分なしなら送らない
+
+    try {
+      const payload = {
+        anon_user_id: anonUserId,
+        token: t,
+        platform: "web",
+        ua: navigator.userAgent,
+        origin: window.location.origin,
+        ts: Date.now(),
+      };
+
+      const res = await fetch(`${apiBase}/devices/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) throw new Error(`devices/register failed: ${res.status}`);
+
+      localStorage.setItem(STORAGE_FCM_TOKEN_SENT, t);
+      localStorage.setItem(STORAGE_FCM_TOKEN_SENT_AT, String(Date.now()));
+    } catch (e) {
+      console.warn("[devices/register] failed (will retry later)", e);
+    }
+  }
+
+  // ===== Push購読 =====
+  /**
+   * ここは「ユーザー操作（クリック）」から呼ぶ前提。
+   * Android Chromeの事故を避けるため、requestPermission は user gesture でのみ実行する。
+   */
+  async function ensurePushSubscribedByClick() {
+    if (!("serviceWorker" in navigator)) throw new Error("This browser does not support Service Worker.");
+    if (!("Notification" in window)) throw new Error("This browser does not support Notification.");
+
+    // SW登録（あなたの mt.qui2.net では直下に firebase-messaging-sw.js がある前提）
     const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
 
     const perm = await Notification.requestPermission();
@@ -587,29 +633,72 @@ export default function App() {
     return token;
   }
 
-  // ★ 通知ON/OFF（ONの瞬間にトークン取得）
-  async function handleToggleNotifications(nextOn) {
-    setSettings((p) => ({ ...p, notificationsEnabled: nextOn }));
-
-    if (!nextOn) {
-      // 今回は「購読解除・token削除」まではやらない（段階実装）
-      console.log("[Push] disabled (UI only)");
-      return;
-    }
-
+  /**
+   * 設定画面の「通知を許可する」ボタンから呼ぶ（ワンクリック直後）
+   */
+  async function requestPushPermissionAndRegister() {
     try {
-      const token = await ensurePushSubscribed();
-      if (!token) {
-        setSettings((p) => ({ ...p, notificationsEnabled: false }));
-        return;
-      }
+      const token = await ensurePushSubscribedByClick();
+      if (!token) return;
+
       setFcmToken(token);
+      localStorage.setItem(STORAGE_FCM_TOKEN, token);
+
+      // サーバーへ登録（差分があれば送る）
+      await postDeviceRegisterIfNeeded(token);
+
+      // 互換のため（UI表示用にON扱い）
+      setSettings((p) => ({ ...p, notificationsEnabled: true }));
     } catch (e) {
       console.error("[Push subscribe error]", e);
-      setSettings((p) => ({ ...p, notificationsEnabled: false }));
-      alert(`Push購読に失敗しました: ${String(e?.message || e)}`);
+      alert(`通知の許可に失敗しました: ${String(e?.message || e)}`);
     }
   }
+
+  /**
+   * 起動時：permission=granted なら「静かに token 再取得」
+   * tokenが変わっていれば保存・サーバー再送（差分で判定）
+   * ※ここでは requestPermission は呼ばない（ダイアログを出さない）
+   */
+  useEffect(() => {
+    let alive = true;
+
+    async function refreshTokenSilentlyAndResendIfChanged() {
+      try {
+        if (!("serviceWorker" in navigator)) return;
+        if (!("Notification" in window)) return;
+        if (Notification.permission !== "granted") return;
+
+        const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+        const token = await getToken(messaging, {
+          vapidKey: VAPID_KEY,
+          serviceWorkerRegistration: reg,
+        });
+
+        if (!alive) return;
+        if (!token) return;
+
+        const prev = localStorage.getItem(STORAGE_FCM_TOKEN) || "";
+        if (prev !== token) {
+          setFcmToken(token);
+          localStorage.setItem(STORAGE_FCM_TOKEN, token);
+        }
+
+        // 差分があればサーバーへ
+        await postDeviceRegisterIfNeeded(token);
+
+        // 互換（permissionがgrantedならON扱い）
+        setSettings((p) => ({ ...p, notificationsEnabled: true }));
+      } catch (e) {
+        console.log("[FCM silent refresh skipped]", e);
+      }
+    }
+
+    refreshTokenSilentlyAndResendIfChanged();
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // ===== 選択ロジック（通知上限）=====
   function toggleVenueOpen(venueKey) {
@@ -700,11 +789,7 @@ export default function App() {
             </button>
 
             {rightHomeIcon === "notifications" ? (
-              <button
-                className="iconBtn"
-                onClick={() => setHash("notifications")}
-                aria-label="notifications"
-              >
+              <button className="iconBtn" onClick={() => setHash("notifications")} aria-label="notifications">
                 ☰
               </button>
             ) : (
@@ -717,10 +802,7 @@ export default function App() {
 
         <div style={styles.modeRow}>
           <div style={styles.modeSwitch}>
-            <button
-              className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`}
-              onClick={() => setMode(MODE_KEIRIN)}
-            >
+            <button className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`} onClick={() => setMode(MODE_KEIRIN)}>
               競輪
             </button>
             <button
@@ -774,7 +856,7 @@ export default function App() {
             selectedCount={selectedCount}
             setToggled={setToggled}
             fcmToken={fcmToken}
-            handleToggleNotifications={handleToggleNotifications} // ★必須
+            onRequestPushPermission={requestPushPermissionAndRegister}
           />
         )}
       </div>
@@ -823,18 +905,10 @@ export default function App() {
                   </div>
 
                   <div className="venueActions" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      className="smallBtn on"
-                      onClick={() => setVenueAll(v, true)}
-                      title="この会場をまとめてON"
-                    >
+                    <button className="smallBtn on" onClick={() => setVenueAll(v, true)} title="この会場をまとめてON">
                       ON
                     </button>
-                    <button
-                      className="smallBtn off"
-                      onClick={() => setVenueAll(v, false)}
-                      title="この会場をまとめてOFF"
-                    >
+                    <button className="smallBtn off" onClick={() => setVenueAll(v, false)} title="この会場をまとめてOFF">
                       OFF
                     </button>
                   </div>
@@ -917,7 +991,7 @@ export default function App() {
           selectedCount={selectedCount}
           setToggled={setToggled}
           fcmToken={fcmToken}
-          handleToggleNotifications={handleToggleNotifications} // ★必須
+          onRequestPushPermission={requestPushPermissionAndRegister}
         />
       )}
     </div>
@@ -936,21 +1010,25 @@ function SettingsModal({
   selectedCount,
   setToggled,
   fcmToken,
-  handleToggleNotifications, // ★必須：親から渡す
+  onRequestPushPermission, // ★ワンクリック直後に権限要求するための関数
 }) {
   const canUseTimer2 = isPro && timer2Allowed;
 
-  // ★保険：未定義なら落とさず警告（原因調査しやすく）
-  const safeTogglePush = async (nextOn) => {
-    if (typeof handleToggleNotifications !== "function") {
-      console.warn(
-        "[SettingsModal] handleToggleNotifications is not a function:",
-        handleToggleNotifications
-      );
-      return;
+  const canRequest = (() => {
+    try {
+      return "Notification" in window && "serviceWorker" in navigator;
+    } catch {
+      return false;
     }
-    await handleToggleNotifications(nextOn);
-  };
+  })();
+
+  const permission = (() => {
+    try {
+      return "Notification" in window ? Notification.permission : "unsupported";
+    } catch {
+      return "unsupported";
+    }
+  })();
 
   return (
     <div className="modalBack" onClick={onClose}>
@@ -963,31 +1041,44 @@ function SettingsModal({
         </div>
 
         <div className="modalBody">
-          {/* Push通知 */}
+          {/* Push通知：トグル廃止 → ボタンのみ */}
           <div className="row">
             <div className="label">Push通知</div>
 
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-              <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={!!settings.notificationsEnabled}
-                  onChange={(e) => safeTogglePush(e.target.checked)}
-                />
-                <span className="slider" />
-              </label>
+            <div style={{ display: "grid", gap: 10 }}>
+              {!canRequest ? (
+                <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5 }}>
+                  この端末/ブラウザでは Push通知が利用できません。
+                </div>
+              ) : permission === "granted" ? (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  <div style={{ fontWeight: 900 }}>許可済み</div>
+                  <div style={{ fontWeight: 900, letterSpacing: 0.2 }}>ON</div>
+                </div>
+              ) : permission === "denied" ? (
+                <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.6 }}>
+                  ブロックされています。Chromeの「サイトの設定」→「通知」を許可に変更してください。
+                </div>
+              ) : (
+                <button className="btn" onClick={onRequestPushPermission}>
+                  通知を許可する
+                </button>
+              )}
 
-              <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>
-                {settings.notificationsEnabled ? "ON" : "OFF"}
+              <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
+                ※ボタン押下直後に許可ダイアログが出ます。必ず「許可」を選んでください。なお{" "}
+                <a href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
+                  iPhoneはホーム画面追加しないと通知できません
+                </a>
+                。
+                <br />
+                ※Androidで「このサイトは権限を要求できません」が出る場合は、画面録画・フローティング表示・クリップボード表示などの
+                “他アプリの重ね表示” をOFFにして再試行してください（このUIは user gesture でのみ要求します）。
               </div>
-            </div>
 
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
-              ※ONにすると許可ダイアログが出るので必ず許可してください。なお{" "}
-              <a href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
-                iPhoneはホーム画面追加しないと通知できません
-              </a>
-              。
+              <div style={{ fontSize: 12, opacity: 0.9 }}>
+                token: {fcmToken ? <code>{formatTokenShort(fcmToken)}</code> : "未取得"}
+              </div>
             </div>
           </div>
 
@@ -996,9 +1087,7 @@ function SettingsModal({
             <div className="label">1つ目タイマー</div>
             <select
               value={settings.timer1MinutesBefore}
-              onChange={(e) =>
-                setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))
-              }
+              onChange={(e) => setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))}
             >
               {MINUTE_OPTIONS.map((m) => (
                 <option key={m} value={m}>
@@ -1023,14 +1112,10 @@ function SettingsModal({
                 <span className="slider" />
               </label>
 
-              <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>
-                {settings.timer2Enabled ? "ON" : "OFF"}
-              </div>
+              <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>{settings.timer2Enabled ? "ON" : "OFF"}</div>
             </div>
 
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75 }}>
-              PRO版で解放
-            </div>
+            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75 }}>PRO版で解放</div>
           </div>
 
           {/* 2回目（分前） */}
@@ -1039,9 +1124,7 @@ function SettingsModal({
             <select
               value={settings.timer2MinutesBefore}
               disabled={!canUseTimer2 || !settings.timer2Enabled}
-              onChange={(e) =>
-                setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))
-              }
+              onChange={(e) => setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))}
             >
               {MINUTE_OPTIONS.map((m) => (
                 <option key={m} value={m}>
@@ -1054,10 +1137,7 @@ function SettingsModal({
           {/* 通知タップ先 */}
           <div className="row">
             <div className="label">通知タップ先</div>
-            <select
-              value={settings.linkTarget}
-              onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}
-            >
+            <select value={settings.linkTarget} onChange={(e) => setSettings((p) => ({ ...p, linkTarget: e.target.value }))}>
               {LINK_TARGETS.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.label}
@@ -1078,9 +1158,7 @@ function SettingsModal({
               期間：登録日から月末まで（20日を過ぎてからの登録は翌々月の月末まで）
             </div>
             {proState?.verified && proState?.message ? (
-              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>
-                {proState.message}
-              </div>
+              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>{proState.message}</div>
             ) : null}
           </div>
 
@@ -1098,18 +1176,8 @@ function SettingsModal({
             <button className="btn danger" onClick={() => setToggled({})}>
               すべて解除
             </button>
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>
-              現在の通知数：{selectedCount}
-            </div>
+            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>現在の通知数：{selectedCount}</div>
           </div>
-
-          {/* デバッグ token（必要なら） */}
-          {fcmToken ? (
-            <div className="row">
-              <div className="label">FCM token（debug）</div>
-              <div style={{ fontSize: 12, wordBreak: "break-all", opacity: 0.9 }}>{fcmToken}</div>
-            </div>
-          ) : null}
         </div>
 
         <div className="modalFoot">
@@ -1156,13 +1224,7 @@ const styles = {
 
   rightHead: { display: "flex", alignItems: "center", gap: 10, flexWrap: "nowrap" },
 
-  modeRow: {
-    marginTop: 10,
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: 10,
-  },
+  modeRow: { marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 },
   modeSwitch: { display: "flex", gap: 8, flexWrap: "wrap" },
 
   main: {
@@ -1180,8 +1242,10 @@ const cssText = `
   --bg: #F6F7F3;
   --card: #FFFFFF;
   --ink: #111111;
-  --accent: #2E6F3E;
-  --accent2: #E6F1E7;
+
+  /* ネイティブ寄りの緑（トグルONなど） */
+  --accent: #2E6F3E;      /* 深緑 */
+  --accent2: #E6F1E7;     /* 薄緑 */
   --border: rgba(0,0,0,0.08);
   --shadow: 0 10px 22px rgba(0,0,0,0.06);
 }
@@ -1519,3 +1583,4 @@ input{ width: 100%; }
   .venueName{ max-width: 58vw; }
 }
 `;
+
