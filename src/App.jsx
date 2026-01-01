@@ -466,17 +466,65 @@ export default function App() {
     if (fcmToken) localStorage.setItem(STORAGE_FCM_TOKEN, fcmToken);
   }, [fcmToken]);
 
-  // foreground message（開いてる最中にPushが来た時）
-  useEffect(() => {
-    try {
-      const unsub = onMessage(messaging, (payload) => {
-        console.log("[FCM foreground message]", payload);
-      });
-      return () => unsub();
-    } catch {
-      // ignore
+// foreground message（開いてる最中にPushが来た時）
+useEffect(() => {
+  try {
+    async function showForegroundNotification(payload) {
+      try {
+        if (!payload) return;
+        if (!("Notification" in window)) return;
+        if (Notification.permission !== "granted") return;
+
+        const title =
+          payload?.notification?.title ||
+          payload?.data?.title ||
+          "もふタイマー";
+        const body =
+          payload?.notification?.body ||
+          payload?.data?.body ||
+          "";
+        const icon =
+          payload?.notification?.icon ||
+          payload?.data?.icon;
+
+        const url =
+          payload?.fcmOptions?.link ||
+          payload?.data?.url ||
+          "https://mt.qui2.net/#notifications";
+
+        // Service Worker 経由で通知（foregroundでもポップアップ表示）
+        const reg = await navigator.serviceWorker?.ready;
+        if (reg?.showNotification) {
+          await reg.showNotification(title, {
+            body,
+            icon,
+            data: { ...(payload?.data || {}), url },
+          });
+          return;
+        }
+
+        // 念のためのフォールバック
+        new Notification(title, {
+          body,
+          icon,
+          data: { ...(payload?.data || {}), url },
+        });
+      } catch {
+        // ignore
+      }
     }
-  }, []);
+
+    const unsub = onMessage(messaging, (payload) => {
+      console.log("[FCM foreground message]", payload);
+      showForegroundNotification(payload);
+    });
+
+    return () => unsub();
+  } catch {
+    // ignore
+  }
+}, []);
+
 
   const todayLabel = useMemo(() => toYYYYMMDD(new Date()), []);
   const selectedCount = useMemo(() => Object.keys(toggled).length, [toggled]);
@@ -643,7 +691,7 @@ export default function App() {
       const data = await res.json().catch(() => ({}));
       setTestPushState({
         loading: false,
-        message: String(data?.message || "OK（5秒後に通知が来なければ端末側/FCM側の問題切り分けへ）"),
+        message: String(data?.message || "OK"),
       });
     } catch (e) {
       console.error("[test push error]", e);
@@ -1197,14 +1245,14 @@ function SettingsModal({
               )}
 
               <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
-                ※ボタン押下直後に許可ダイアログが出ます。必ず「許可」を選んでください。なお{" "}
+                ※ボタン押下直後、必ず「許可」を選んでください。{" "}
                 <a href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
-                  iPhoneはホーム画面追加しないと通知できません
+                  iPhoneは「ホーム画面追加」をしてからテストしてください
                 </a>
                 。
                 <br />
-                ※Androidで「このサイトは権限を要求できません」が出る場合は、画面録画・フローティング表示・クリップボード表示などの
-                “他アプリの重ね表示” をOFFにして再試行してください（このUIは user gesture でのみ要求します）。
+                ※Androidで「このサイトは権限を要求できません」が出る場合は、
+                “他アプリの重ね表示” をOFFにしてから再度トライしてください。
               </div>
 
               <div style={{ fontSize: 12, opacity: 0.9 }}>
