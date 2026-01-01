@@ -124,6 +124,14 @@ function todayKeyYYYYMMDD() {
 function toYYYYMMDD(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
+
+function formatYMD_JP(ms) {
+  if (!ms || !Number.isFinite(Number(ms))) return "";
+  const d = new Date(Number(ms)); // クライアントのローカル（JST想定）
+  return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
+}
+
+
 function toHHMM(dateObj) {
   return `${pad2(dateObj.getHours())}:${pad2(dateObj.getMinutes())}`;
 }
@@ -416,6 +424,7 @@ export default function App() {
     maxNotifications: 10,
     timer2Allowed: false,
     adsOff: false,
+    expiresAtMs: null,   // ← 追加
     period: "",
     message: "",
   });
@@ -591,8 +600,22 @@ useEffect(() => {
       if (!res.ok) throw new Error(`verify failed: ${res.status}`);
 
       const data = await res.json();
-      const isPro = !!data?.pro;
 
+      // 互換：旧 {pro:true} / 新 {plan:"PRO"} どちらでもOKにする
+      const plan = String(data?.plan || (data?.pro ? "PRO" : "FREE")).toUpperCase();
+      const isPro = plan === "PRO";
+
+      // expires_at（ms）を優先
+      const expiresAtMs =
+        Number.isFinite(Number(data?.expires_at)) ? Number(data.expires_at) : null;
+
+      const expiresLabel = expiresAtMs ? formatYMD_JP(expiresAtMs) : "";
+      const periodText =
+        expiresLabel
+          ? `有効期限：${expiresLabel}`
+          : String(data?.period || data?.period_text || data?.valid_until || "");
+
+      // 既存の制御はそのまま
       const df = defaultsFromProFlag(isPro);
       const maxNotifications = Number.isFinite(Number(data?.max_notifications))
         ? Number(data.max_notifications)
@@ -600,7 +623,8 @@ useEffect(() => {
 
       const timer2Allowed =
         typeof data?.timer2_allowed === "boolean" ? data.timer2_allowed : df.timer2Allowed;
-      const adsOff = typeof data?.ads_off === "boolean" ? data.ads_off : df.adsOff;
+      const adsOff =
+        typeof data?.ads_off === "boolean" ? data.ads_off : df.adsOff;
 
       setProState({
         loading: false,
@@ -609,9 +633,11 @@ useEffect(() => {
         maxNotifications,
         timer2Allowed,
         adsOff,
-        period: String(data?.period || data?.period_text || data?.valid_until || ""),
-        message: String(data?.message || ""),
+        expiresAtMs,             // ← 追加
+        period: periodText,       // ← ここに「有効期限：YYYY/MM/DD」が入る
+        message: String(data?.message || (isPro ? "PRO" : "無料版")),
       });
+
 
       // PRO→FREEに落ちた時、2つ目タイマーONならOFFに戻す（事故防止）
       if (!isPro) {
@@ -960,7 +986,11 @@ useEffect(() => {
           </div>
 
           <div className="tinyMeta">
-            <span className={`pill ${isPro ? "pillOn" : "pillOff"}`}>{isPro ? "PRO" : "FREE"}</span>
+            <span className={`pill ${isPro ? "pillOn" : "pillOff"}`}>
+              {isPro
+                ? `PRO${proState?.expiresAtMs ? `（有効期限：${formatYMD_JP(proState.expiresAtMs)}）` : ""}`
+                : "FREE"}
+            </span>
             <span className="tinyCount">
               通知 {selectedCount}/{maxNotifications}
             </span>
@@ -1351,7 +1381,9 @@ function SettingsModal({
                 </button>
               </div>
               <div className="codeMeta">
-                <div style={{ fontSize: 12, opacity: 0.85 }}>期間：{proPeriodLabel || "—"}</div>
+                <div style={{ fontSize: 12, opacity: 0.85 }}>
+                  {isPro ? `有効期限：${formatYMD_JP(proState.expiresAtMs) || "—"}` : "無料版"}
+                </div>
                 <div style={{ fontSize: 12, opacity: 0.85 }}>{proStatusLabel || ""}</div>
               </div>
             </div>
