@@ -56,6 +56,12 @@ function setHash(route) {
   window.location.hash = route === "notifications" ? "#notifications" : "#";
 }
 
+function getApiBase() {
+  const base = (import.meta?.env?.VITE_API_BASE || "").trim();
+  return base ? base.replace(/\/$/, "") : "";
+}
+
+
 /* ===== 設定/保存 ===== */
 const MINUTE_OPTIONS = [5, 4, 3, 2, 1];
 
@@ -220,7 +226,7 @@ function computeNotifyAt(race, minutesBefore) {
 }
 
 async function trySendRemoveToServer({ anonUserId, raceKey }) {
-  const apiBase = (import.meta?.env?.VITE_API_BASE || "").trim().replace(/\/$/, "");
+  const apiBase = getApiBase();
   if (!apiBase) return;
   try {
     await fetch(`${apiBase}/notifications/remove`, {
@@ -232,6 +238,23 @@ async function trySendRemoveToServer({ anonUserId, raceKey }) {
     // ignore
   }
 }
+
+async function postSubscriptionSetToServer(payload) {
+  const apiBase = getApiBase();
+  if (!apiBase) return;
+
+  try {
+    const res = await fetch(`${apiBase}/subscriptions/set`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`subscriptions/set failed: ${res.status}`);
+  } catch (e) {
+    console.warn("[subscriptions/set] failed", e);
+  }
+}
+
 
 /* ===== ページ：通知一覧 ===== */
 function NotificationsPage({ venues, toggled, settings, timer2Active, onBack, onRemoveRaceKey, onOpenLink }) {
@@ -446,6 +469,12 @@ export default function App() {
 
   const todayLabel = useMemo(() => toYYYYMMDD(new Date()), []);
   const selectedCount = useMemo(() => Object.keys(toggled).length, [toggled]);
+
+  const raceMap = useMemo(() => {
+  const m = new Map();
+  for (const v of venues) for (const r of v.races) m.set(r.raceKey, r);
+  return m;
+}, [venues]);
 
   // ===== API base =====
   function getApiBase() {
@@ -731,26 +760,66 @@ export default function App() {
   }
 
   // 個別トグル（FREE上限対応）
-  function toggleRace(raceKey) {
-    setToggled((prev) => {
-      const next = { ...prev };
+function toggleRace(raceKey) {
+  const anonUserId = ensureAnonUserId();
+  const race = raceMap.get(raceKey);
 
-      if (next[raceKey]) {
-        delete next[raceKey];
-        return next;
-      }
+  // PROのときだけ2本目タイマーを許可（あなたの既存ロジックに合わせる）
+  const timer2Allowed = maxNotifications >= 999; // 例: FREE=10 / PRO=999想定
+  // ↑もし別のPRO判定変数があるなら、それを使う方がより確実
 
-      // 追加しようとしている
-      const currentCount = Object.keys(next).length;
-      if (currentCount >= maxNotifications) {
-        alert(`通知は最大 ${maxNotifications} 件までです。`);
-        return next;
-      }
+  setToggled((prev) => {
+    const next = { ...prev };
 
-      next[raceKey] = true;
+    // OFF
+    if (next[raceKey]) {
+      delete next[raceKey];
+
+      postSubscriptionSetToServer({
+        anon_user_id: anonUserId,
+        race_key: raceKey,
+        enabled: false,
+      });
+
       return next;
-    });
-  }
+    }
+
+    // ON（上限チェック）
+    const currentCount = Object.keys(next).length;
+    if (currentCount >= maxNotifications) {
+      alert(`通知は最大 ${maxNotifications} 件までです。`);
+      return next;
+    }
+
+    next[raceKey] = true;
+
+    // ON時に必要データが無ければ送らない（JSON未取得など）
+    if (race) {
+      const t1 = Number(settings.timer1MinutesBefore);
+      const t2EnabledUI = !!(timer2Active && settings.timer2Enabled);
+      const t2 = Number(settings.timer2MinutesBefore);
+
+      const payload = {
+        anon_user_id: anonUserId,
+        race_key: raceKey,
+        enabled: true,
+        closed_at_hhmm: race.closedAtHHMM, // 締切（HH:MM）
+        race_url: race.url,                // 通知タップ先の元URL（JSON由来）
+        title: `${race.venueName}${race.raceNo}R`, // 例: 青森1R
+        timer1_min: Number.isFinite(t1) ? t1 : 5,
+
+        // ★ FREEなら強制的にfalseにする
+        timer2_enabled: timer2Allowed ? t2EnabledUI : false,
+        timer2_min: Number.isFinite(t2) ? t2 : 1,
+      };
+
+      postSubscriptionSetToServer(payload);
+    }
+
+    return next;
+  });
+}
+
 
   function openLinkForRace(race) {
     const url = getLinkUrl(settings.linkTarget, race.url);
