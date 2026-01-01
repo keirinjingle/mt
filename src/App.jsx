@@ -12,7 +12,7 @@ import { messaging, VAPID_KEY } from "./firebase";
  * 追加:
  * - Hash Routing: #notifications で通知一覧ページ
  * - 通知一覧から削除（localStorage更新 + 可能ならサーバーへ通知）
- * - ヘッダーに通知ON/OFF（Push購読）
+ * - ヘッダーに通知ON/OFF（Push購読）※現在は「設定モーダルのみ」に寄せる方針でもOK（UI配置はここでは無し）
  * - PRO（有料コード）をAPIで検証（サーバー管理）
  *   - 通知上限（FREE=10など）/ 2つ目タイマー / 広告OFF をサーバーの返答で制御
  *
@@ -335,31 +335,6 @@ export default function App() {
     ensureAnonUserId();
   }, []);
 
-  async function handleToggleNotifications(nextOn) {
-  // UI状態を先に更新
-  setSettings((p) => ({ ...p, notificationsEnabled: nextOn }));
-
-  if (!nextOn) {
-    // まずはOFFにするだけ（購読解除やtoken破棄は後でOK）
-    setFcmToken("");
-    return;
-  }
-
-  try {
-    const token = await ensurePushSubscribed();
-    if (!token) {
-      // permission denied等
-      setSettings((p) => ({ ...p, notificationsEnabled: false }));
-      return;
-    }
-    setFcmToken(token);
-  } catch (e) {
-    console.error("[Push subscribe error]", e);
-    setSettings((p) => ({ ...p, notificationsEnabled: false }));
-    alert(`Push購読に失敗しました: ${String(e?.message || e)}`);
-  }
-}
-
   /* route */
   const [route, setRoute] = useState(getRouteFromHash());
   useEffect(() => {
@@ -451,9 +426,15 @@ export default function App() {
       const unsub = onMessage(messaging, (payload) => {
         console.log("[FCM foreground message]", payload);
       });
-      return () => unsub();
+      return () => {
+        try {
+          unsub && unsub();
+        } catch {
+          // ignore
+        }
+      };
     } catch {
-      // ignore
+      return;
     }
   }, []);
 
@@ -576,14 +557,17 @@ export default function App() {
   const isPro = !!proState.pro;
   const timer2Allowed = !!proState.timer2Allowed;
   const adsOff = !!proState.adsOff;
-  const maxNotifications = Number(proState.maxNotifications || (isPro ? 999 : 10)) || (isPro ? 999 : 10);
+  const maxNotifications =
+    Number(proState.maxNotifications || (isPro ? 999 : 10)) || (isPro ? 999 : 10);
 
   const timer2Active = isPro && timer2Allowed && !!settings.timer2Enabled;
 
   // ===== Push購読 =====
   async function ensurePushSubscribed() {
-    if (!("serviceWorker" in navigator)) throw new Error("This browser does not support Service Worker.");
-    if (!("Notification" in window)) throw new Error("This browser does not support Notification.");
+    if (!("serviceWorker" in navigator))
+      throw new Error("This browser does not support Service Worker.");
+    if (!("Notification" in window))
+      throw new Error("This browser does not support Notification.");
 
     // iOS PWA 前提：ここでSW登録（同一オリジン直下）
     const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
@@ -628,10 +612,6 @@ export default function App() {
   }
 
   // ===== 選択ロジック（通知上限）=====
-  function canAddMoreSelections() {
-    return selectedCount < maxNotifications;
-  }
-
   function toggleVenueOpen(venueKey) {
     setOpenVenues((prev) => ({ ...prev, [venueKey]: !prev[venueKey] }));
   }
@@ -655,8 +635,6 @@ export default function App() {
       }
 
       if (remaining <= 0 && Object.keys(next).length >= maxNotifications) {
-        // 追加できない（枠いっぱい）
-        // ここはアラートを出す/出さないは好み。最小は出す。
         alert(`通知は最大 ${maxNotifications} 件までです。`);
       }
       return next;
@@ -717,14 +695,16 @@ export default function App() {
           </div>
 
           <div style={styles.rightHead}>
-
-
             <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">
               ⚙︎
             </button>
 
             {rightHomeIcon === "notifications" ? (
-              <button className="iconBtn" onClick={() => setHash("notifications")} aria-label="notifications">
+              <button
+                className="iconBtn"
+                onClick={() => setHash("notifications")}
+                aria-label="notifications"
+              >
                 ☰
               </button>
             ) : (
@@ -737,10 +717,16 @@ export default function App() {
 
         <div style={styles.modeRow}>
           <div style={styles.modeSwitch}>
-            <button className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`} onClick={() => setMode(MODE_KEIRIN)}>
+            <button
+              className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`}
+              onClick={() => setMode(MODE_KEIRIN)}
+            >
               競輪
             </button>
-            <button className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`} onClick={() => setMode(MODE_AUTORACE)}>
+            <button
+              className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`}
+              onClick={() => setMode(MODE_AUTORACE)}
+            >
               オート
             </button>
           </div>
@@ -764,7 +750,6 @@ export default function App() {
 
         <Header rightHomeIcon="home" />
 
-        {/* 広告はnotificationsでは基本出さない（必要なら出す） */}
         <NotificationsPage
           venues={venues}
           toggled={toggled}
@@ -772,10 +757,11 @@ export default function App() {
           timer2Active={timer2Active}
           onBack={() => setHash("home")}
           onRemoveRaceKey={removeNotification}
-          onOpenLink={({ url }) => window.open(getLinkUrl(settings.linkTarget, url), "_blank", "noopener,noreferrer")}
+          onOpenLink={({ url }) =>
+            window.open(getLinkUrl(settings.linkTarget, url), "_blank", "noopener,noreferrer")
+          }
         />
 
-        {/* 設定（共通） */}
         {settingsOpen && (
           <SettingsModal
             onClose={() => setSettingsOpen(false)}
@@ -788,7 +774,7 @@ export default function App() {
             selectedCount={selectedCount}
             setToggled={setToggled}
             fcmToken={fcmToken}
-            handleToggleNotifications={handleToggleNotifications} // ★これ必須
+            handleToggleNotifications={handleToggleNotifications} // ★必須
           />
         )}
       </div>
@@ -802,7 +788,6 @@ export default function App() {
 
       <Header rightHomeIcon="notifications" />
 
-      {/* 広告：header外、mainの上（崩れにくい） */}
       {!adsOff && (
         <div style={styles.main}>
           <div className="adBar">
@@ -838,10 +823,18 @@ export default function App() {
                   </div>
 
                   <div className="venueActions" onClick={(e) => e.stopPropagation()}>
-                    <button className="smallBtn on" onClick={() => setVenueAll(v, true)} title="この会場をまとめてON">
+                    <button
+                      className="smallBtn on"
+                      onClick={() => setVenueAll(v, true)}
+                      title="この会場をまとめてON"
+                    >
                       ON
                     </button>
-                    <button className="smallBtn off" onClick={() => setVenueAll(v, false)} title="この会場をまとめてOFF">
+                    <button
+                      className="smallBtn off"
+                      onClick={() => setVenueAll(v, false)}
+                      title="この会場をまとめてOFF"
+                    >
                       OFF
                     </button>
                   </div>
@@ -912,7 +905,6 @@ export default function App() {
           })}
       </main>
 
-      {/* 設定（共通） */}
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
@@ -925,7 +917,7 @@ export default function App() {
           selectedCount={selectedCount}
           setToggled={setToggled}
           fcmToken={fcmToken}
-          handleToggleNotifications={handleToggleNotifications}  // ★これを追加
+          handleToggleNotifications={handleToggleNotifications} // ★必須
         />
       )}
     </div>
@@ -951,7 +943,10 @@ function SettingsModal({
   // ★保険：未定義なら落とさず警告（原因調査しやすく）
   const safeTogglePush = async (nextOn) => {
     if (typeof handleToggleNotifications !== "function") {
-      console.warn("[SettingsModal] handleToggleNotifications is not a function:", handleToggleNotifications);
+      console.warn(
+        "[SettingsModal] handleToggleNotifications is not a function:",
+        handleToggleNotifications
+      );
       return;
     }
     await handleToggleNotifications(nextOn);
@@ -970,41 +965,40 @@ function SettingsModal({
         <div className="modalBody">
           {/* Push通知 */}
           <div className="row">
-  <div className="label">Push通知</div>
+            <div className="label">Push通知</div>
 
-  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-    {/* 左：スイッチ */}
-    <label className="toggle">
-      <input
-        type="checkbox"
-        checked={!!settings.notificationsEnabled}
-        onChange={(e) => safeTogglePush(e.target.checked)}
-      />
-      <span className="slider" />
-    </label>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={!!settings.notificationsEnabled}
+                  onChange={(e) => safeTogglePush(e.target.checked)}
+                />
+                <span className="slider" />
+              </label>
 
-    {/* 右：ON/OFF 表示 */}
-    <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>
-      {settings.notificationsEnabled ? "ON" : "OFF"}
-    </div>
-  </div>
+              <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>
+                {settings.notificationsEnabled ? "ON" : "OFF"}
+              </div>
+            </div>
 
-  <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
-    ※ONにすると許可ダイアログが出るので必ず許可してください。なお{" "}
-    <a href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
-      iPhoneはホーム画面追加しないと通知できません
-    </a>
-    。
-  </div>
-</div>
+            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
+              ※ONにすると許可ダイアログが出るので必ず許可してください。なお{" "}
+              <a href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
+                iPhoneはホーム画面追加しないと通知できません
+              </a>
+              。
+            </div>
+          </div>
 
-
-          {/* 1つ目タイマー（元：通知①） */}
+          {/* 1つ目タイマー */}
           <div className="row">
             <div className="label">1つ目タイマー</div>
             <select
               value={settings.timer1MinutesBefore}
-              onChange={(e) => setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))}
+              onChange={(e) =>
+                setSettings((p) => ({ ...p, timer1MinutesBefore: Number(e.target.value) }))
+              }
             >
               {MINUTE_OPTIONS.map((m) => (
                 <option key={m} value={m}>
@@ -1016,30 +1010,28 @@ function SettingsModal({
 
           {/* 2つ目タイマー（スイッチ） */}
           <div className="row">
-            <div className="row">
-  <div className="label">2つ目タイマー</div>
+            <div className="label">2つ目タイマー</div>
 
-  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-    <label className="toggle">
-      <input
-        type="checkbox"
-        checked={!!settings.timer2Enabled}
-        onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
-        disabled={!canUseTimer2}
-      />
-      <span className="slider" />
-    </label>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={!!settings.timer2Enabled}
+                  onChange={(e) => setSettings((p) => ({ ...p, timer2Enabled: e.target.checked }))}
+                  disabled={!canUseTimer2}
+                />
+                <span className="slider" />
+              </label>
 
-    <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>
-      {settings.timer2Enabled ? "ON" : "OFF"}
-    </div>
-  </div>
+              <div style={{ fontWeight: 700, letterSpacing: 0.2 }}>
+                {settings.timer2Enabled ? "ON" : "OFF"}
+              </div>
+            </div>
 
-  <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75 }}>
-    PRO版で解放
-  </div>
-</div>
-
+            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.75 }}>
+              PRO版で解放
+            </div>
+          </div>
 
           {/* 2回目（分前） */}
           <div className="row">
@@ -1047,7 +1039,9 @@ function SettingsModal({
             <select
               value={settings.timer2MinutesBefore}
               disabled={!canUseTimer2 || !settings.timer2Enabled}
-              onChange={(e) => setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))}
+              onChange={(e) =>
+                setSettings((p) => ({ ...p, timer2MinutesBefore: Number(e.target.value) }))
+              }
             >
               {MINUTE_OPTIONS.map((m) => (
                 <option key={m} value={m}>
@@ -1084,7 +1078,9 @@ function SettingsModal({
               期間：登録日から月末まで（20日を過ぎてからの登録は翌々月の月末まで）
             </div>
             {proState?.verified && proState?.message ? (
-              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>{proState.message}</div>
+              <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>
+                {proState.message}
+              </div>
             ) : null}
           </div>
 
@@ -1102,7 +1098,9 @@ function SettingsModal({
             <button className="btn danger" onClick={() => setToggled({})}>
               すべて解除
             </button>
-            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>現在の通知数：{selectedCount}</div>
+            <div style={{ gridColumn: "2 / 3", fontSize: 12, opacity: 0.8 }}>
+              現在の通知数：{selectedCount}
+            </div>
           </div>
 
           {/* デバッグ token（必要なら） */}
@@ -1124,14 +1122,11 @@ function SettingsModal({
   );
 }
 
-
-
-
 /* ===== style ===== */
 const styles = {
   page: {
     minHeight: "100vh",
-    background: "#F6F7F3", // ほんのりアイボリー
+    background: "#F6F7F3",
     color: "#111",
     fontFamily:
       'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Sans", Arial, sans-serif',
@@ -1143,7 +1138,7 @@ const styles = {
     top: 0,
     zIndex: 5,
     backdropFilter: "blur(10px)",
-    background: "rgba(246,247,243,0.90)", // page背景に合わせる
+    background: "rgba(246,247,243,0.90)",
     borderBottom: "1px solid rgba(0,0,0,0.06)",
     padding: "12px 12px 10px",
   },
@@ -1159,10 +1154,15 @@ const styles = {
   title: { fontSize: 18, fontWeight: 900, letterSpacing: 0.2, whiteSpace: "nowrap" },
   dateInline: { fontSize: 12, fontWeight: 700, opacity: 0.7, whiteSpace: "nowrap" },
 
-  // ヘッダー右は「設定」「一覧」だけ置く想定（通知は設定へ）
   rightHead: { display: "flex", alignItems: "center", gap: 10, flexWrap: "nowrap" },
 
-  modeRow: { marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 },
+  modeRow: {
+    marginTop: 10,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+  },
   modeSwitch: { display: "flex", gap: 8, flexWrap: "wrap" },
 
   main: {
@@ -1180,10 +1180,8 @@ const cssText = `
   --bg: #F6F7F3;
   --card: #FFFFFF;
   --ink: #111111;
-
-  /* ネイティブ寄りの緑（トグルONなど） */
-  --accent: #2E6F3E;      /* 深緑 */
-  --accent2: #E6F1E7;     /* 薄緑 */
+  --accent: #2E6F3E;
+  --accent2: #E6F1E7;
   --border: rgba(0,0,0,0.08);
   --shadow: 0 10px 22px rgba(0,0,0,0.06);
 }
@@ -1243,7 +1241,6 @@ input{ width: 100%; }
   align-items: center;
   justify-content: center;
 }
-`;
 
 /* --- buttons --- */
 .btn{
@@ -1277,50 +1274,6 @@ input{ width: 100%; }
 }
 .adText{ font-weight: 900; }
 .adSub{ font-size: 12px; opacity: 0.75; margin-top: 2px; }
-
-/* --- mini switch (push on/off) --- */
-.miniSwitch{
-  display:flex;
-  align-items:center;
-  gap: 10px;
-  user-select:none;
-  cursor:pointer;
-  flex: 0 0 auto;
-}
-.miniSwitch input{ display:none; }
-.miniLabel{
-  font-weight: 900;
-  opacity: 0.9;
-  white-space: nowrap;
-}
-.miniSlider{
-  width: 44px;
-  height: 26px;
-  border-radius: 999px;
-  background: rgba(0,0,0,0.18);
-  border: 1px solid rgba(0,0,0,0.10);
-  position: relative;
-  transition: .15s;
-}
-.miniSlider:before{
-  content:"";
-  position:absolute;
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  top: 2px;
-  left: 2px;
-  background: #fff;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.16);
-  transition: .15s;
-}
-.miniSwitch input:checked + .miniSlider{
-  background: var(--accent);
-  border-color: rgba(46,111,62,0.30);
-}
-.miniSwitch input:checked + .miniSlider:before{
-  transform: translateX(18px);
-}
 
 /* --- tiny meta --- */
 .tinyMeta{
@@ -1453,7 +1406,14 @@ input{ width: 100%; }
 /* --- toggle --- */
 .toggleWrap{ padding-left: 6px; }
 .toggle{ position: relative; display:inline-block; width: 54px; height: 32px; }
-.toggle input{ display:none; }
+.toggle input{
+  position:absolute;
+  inset:0;
+  opacity:0;
+  width:100%;
+  height:100%;
+  cursor:pointer;
+}
 .slider{
   position:absolute; cursor:pointer; inset:0;
   background: rgba(0,0,0,0.18);
@@ -1476,14 +1436,6 @@ input{ width: 100%; }
   border-color: rgba(46,111,62,0.30);
 }
 .toggle input:checked + .slider:before{ transform: translateX(22px); }
-
-/* --- settings helpers (Pro note 1行) --- */
-.proNote{
-  font-weight: 900;
-  opacity: 0.55;
-  margin-left: 6px;
-  white-space: nowrap;
-}
 
 /* --- notifications page --- */
 .pageHead{
@@ -1562,81 +1514,8 @@ input{ width: 100%; }
   font-weight: 900;
   opacity: 0.80;
 }
-.switchLine{
-  display:flex;
-  align-items:center;
-  gap: 10px;
-  font-weight: 900;
-}
 @media (max-width: 560px){
   .row{ grid-template-columns: 1fr; }
   .venueName{ max-width: 58vw; }
 }
-
-/* 設定：右側カラムの入れ物 */
-.pushBox{
-  display:flex;
-  flex-direction:column;
-  gap:10px;
-  width:100%;
-}
-
-/* スイッチ（モーダル用） */
-.switchLine{
-  display:flex;
-  align-items:center;
-  gap:12px;
-  user-select:none;
-}
-.switchLine input{ display:none; }
-
-.switchUi{
-  width: 56px;
-  height: 32px;
-  border-radius: 999px;
-  background: rgba(0,0,0,0.16);
-  border: 1px solid rgba(0,0,0,0.10);
-  position: relative;
-  transition: .15s;
-  flex: 0 0 auto;
-}
-.switchUi:before{
-  content:"";
-  position:absolute;
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  top: 2px;
-  left: 2px;
-  background: #fff;
-  box-shadow: 0 4px 14px rgba(0,0,0,0.16);
-  transition: .15s;
-}
-
-.switchLine input:checked + .switchUi{
-  background: rgba(46,125,50,0.55);
-  border-color: rgba(46,125,50,0.25);
-}
-.switchLine input:checked + .switchUi:before{
-  transform: translateX(24px);
-}
-
-.switchText{
-  font-weight:600;
-  opacity:0.9;
-}
-
-/* 注意書き */
-.note{
-  font-size: 12px;
-  line-height: 1.6;
-  opacity: 0.85;
-}
-
-.note .link{
-  text-decoration: underline;
-}
-
-
 `;
-
