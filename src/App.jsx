@@ -931,10 +931,6 @@ export default function App() {
   function Header({ rightHomeIcon }) {
     return (
       <header style={styles.header}>
-      <link rel="manifest" href="/manifest.webmanifest">
-      <meta name="theme-color" content="#F6F7F3">
-      <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-
         <div style={styles.headerTop}>
           <div style={styles.titleRow}>
             <div style={styles.title}>
