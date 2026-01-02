@@ -16,34 +16,10 @@ import { messaging, VAPID_KEY } from "./firebase";
  * - token は localStorage に保持し、起動時に permission=granted なら token 再取得→差分があればサーバーへ再送
  * - PRO（有料コード）をAPIで検証（サーバー管理）
  *
- * サーバー側想定API:
- * 1) PRO検証
- *   POST {VITE_API_BASE}/pro/verify
- *     body: { anon_user_id: string, pro_code: string }
- *     resp例:
- *       {
- *         ok: true,
- *         pro: true,
- *         max_notifications: 999,   // 未指定なら既定(PRO=999, FREE=10)
- *         timer2_allowed: true,     // 未指定なら既定(PRO=true, FREE=false)
- *         ads_off: true,            // 未指定なら既定(PRO=true, FREE=false)
- *         period: "optional",
- *         message: "optional"
- *       }
- *
- * 2) token登録（サーバーが token を保持して送る前提）
- *   POST {VITE_API_BASE}/devices/register
- *     body: { anon_user_id, token, platform, ua, origin, ts }
- *
- * 3) 通知削除（任意）
- *   POST {VITE_API_BASE}/notifications/remove
- *     body: { anon_user_id, race_key }
- *
- * 4) 通知登録（任意）
- *   POST {VITE_API_BASE}/subscriptions/set
- *     body: { anon_user_id, race_key, enabled, closed_at_hhmm, race_url, title, timer1_min, timer2_enabled, timer2_min }
- *
- * ※ VITE_API_BASE が空なら、常にFREE扱い（PRO無効）+ token登録APIも呼びません。
+ * IMPORTANT（今回の修正点）:
+ * - すべてのAPI呼び出しURLを apiUrl() 経由に統一（/api 付与のズレを防ぐ）
+ * - home側SettingsModalにも isPro を渡す（表示ズレ防止）
+ * - PRO送信ボタンとverify開始にconsoleログを追加（「無反応」の切り分けが即できる）
  */
 
 const APP_TITLE = "もふタイマー";
@@ -61,14 +37,25 @@ function setHash(route) {
   window.location.hash = route === "notifications" ? "#notifications" : "#";
 }
 
+/**
+ * VITE_API_BASE は「ホストだけ」にしてください（/api まで入れない）
+ * 例:
+ *  ✅ VITE_API_BASE=https://mt.qui2.net
+ *  ❌ VITE_API_BASE=https://mt.qui2.net/api
+ */
 function getApiBase() {
   const base = (import.meta?.env?.VITE_API_BASE || "").trim();
   return base ? base.replace(/\/$/, "") : "";
 }
 
+/**
+ * API URL を一元化
+ * - サーバー側が /api 配下で提供している前提
+ * - VITE_API_BASE が空なら "" を返して「呼ばない」
+ */
 function apiUrl(path) {
   const base = getApiBase();
-  if (!base) return ""; // API未設定なら空（=呼ばない運用）
+  if (!base) return "";
   const p = path.startsWith("/") ? path : `/${path}`;
   return `${base}/api${p}`;
 }
@@ -137,7 +124,6 @@ function formatYMD_JP(ms) {
   const d = new Date(Number(ms)); // クライアントのローカル（JST想定）
   return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
 }
-
 
 function toHHMM(dateObj) {
   return `${pad2(dateObj.getHours())}:${pad2(dateObj.getMinutes())}`;
@@ -241,11 +227,12 @@ function computeNotifyAt(race, minutesBefore) {
   return addMinutes(closed, -m);
 }
 
+/* ===== サーバー連携（apiUrl 統一版） ===== */
 async function trySendRemoveToServer({ anonUserId, raceKey }) {
-  const apiBase = getApiBase();
-  if (!apiBase) return;
+  const url = apiUrl("/notifications/remove");
+  if (!url) return;
   try {
-    await fetch(`${apiBase}/notifications/remove`, {
+    await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ anon_user_id: anonUserId, race_key: raceKey }),
@@ -256,11 +243,11 @@ async function trySendRemoveToServer({ anonUserId, raceKey }) {
 }
 
 async function postSubscriptionSetToServer(payload) {
-  const apiBase = getApiBase();
-  if (!apiBase) return;
+  const url = apiUrl("/subscriptions/set");
+  if (!url) return;
 
   try {
-    const res = await fetch(`${apiBase}/subscriptions/set`, {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -431,7 +418,7 @@ export default function App() {
     maxNotifications: 10,
     timer2Allowed: false,
     adsOff: false,
-    expiresAtMs: null,   // ← 追加
+    expiresAtMs: null,
     period: "",
     message: "",
   });
@@ -482,65 +469,54 @@ export default function App() {
     if (fcmToken) localStorage.setItem(STORAGE_FCM_TOKEN, fcmToken);
   }, [fcmToken]);
 
-// foreground message（開いてる最中にPushが来た時）
-useEffect(() => {
-  try {
-    async function showForegroundNotification(payload) {
-      try {
-        if (!payload) return;
-        if (!("Notification" in window)) return;
-        if (Notification.permission !== "granted") return;
+  // foreground message（開いてる最中にPushが来た時）
+  useEffect(() => {
+    try {
+      async function showForegroundNotification(payload) {
+        try {
+          if (!payload) return;
+          if (!("Notification" in window)) return;
+          if (Notification.permission !== "granted") return;
 
-        const title =
-          payload?.notification?.title ||
-          payload?.data?.title ||
-          "もふタイマー";
-        const body =
-          payload?.notification?.body ||
-          payload?.data?.body ||
-          "";
-        const icon =
-          payload?.notification?.icon ||
-          payload?.data?.icon;
+          const title = payload?.notification?.title || payload?.data?.title || "もふタイマー";
+          const body = payload?.notification?.body || payload?.data?.body || "";
+          const icon = payload?.notification?.icon || payload?.data?.icon;
 
-        const url =
-          payload?.fcmOptions?.link ||
-          payload?.data?.url ||
-          "https://mt.qui2.net/#notifications";
+          const url =
+            payload?.fcmOptions?.link || payload?.data?.url || "https://mt.qui2.net/#notifications";
 
-        // Service Worker 経由で通知（foregroundでもポップアップ表示）
-        const reg = await navigator.serviceWorker?.ready;
-        if (reg?.showNotification) {
-          await reg.showNotification(title, {
+          // Service Worker 経由で通知（foregroundでもポップアップ表示）
+          const reg = await navigator.serviceWorker?.ready;
+          if (reg?.showNotification) {
+            await reg.showNotification(title, {
+              body,
+              icon,
+              data: { ...(payload?.data || {}), url },
+            });
+            return;
+          }
+
+          // 念のためのフォールバック
+          new Notification(title, {
             body,
             icon,
             data: { ...(payload?.data || {}), url },
           });
-          return;
+        } catch {
+          // ignore
         }
-
-        // 念のためのフォールバック
-        new Notification(title, {
-          body,
-          icon,
-          data: { ...(payload?.data || {}), url },
-        });
-      } catch {
-        // ignore
       }
+
+      const unsub = onMessage(messaging, (payload) => {
+        console.log("[FCM foreground message]", payload);
+        showForegroundNotification(payload);
+      });
+
+      return () => unsub();
+    } catch {
+      // ignore
     }
-
-    const unsub = onMessage(messaging, (payload) => {
-      console.log("[FCM foreground message]", payload);
-      showForegroundNotification(payload);
-    });
-
-    return () => unsub();
-  } catch {
-    // ignore
-  }
-}, []);
-
+  }, []);
 
   const todayLabel = useMemo(() => toYYYYMMDD(new Date()), []);
   const selectedCount = useMemo(() => Object.keys(toggled).length, [toggled]);
@@ -555,7 +531,6 @@ useEffect(() => {
   const verifyTimerRef = useRef(null);
 
   function defaultsFromProFlag(isPro) {
-    // サーバーが何も返さない時の保険
     return {
       maxNotifications: isPro ? 999 : 10,
       timer2Allowed: !!isPro,
@@ -564,11 +539,19 @@ useEffect(() => {
   }
 
   async function verifyProCodeNow(code) {
-    const apiBase = getApiBase();
     const trimmed = String(code || "").trim();
 
+    // クリック〜verify開始が動いてるかの切り分けログ
+    console.log("[PRO] verify start", {
+      code: trimmed,
+      apiBase: getApiBase(),
+      apiVerifyUrl: apiUrl("/pro/verify"),
+      origin: window.location.origin,
+    });
+
     // APIが無い/空ならFREE固定
-    if (!apiBase) {
+    const verifyUrl = apiUrl("/pro/verify");
+    if (!verifyUrl) {
       setProState((p) => ({
         ...p,
         loading: false,
@@ -576,7 +559,7 @@ useEffect(() => {
         pro: false,
         ...defaultsFromProFlag(false),
         period: "",
-        message: "無料版",
+        message: "無料版（API未設定）",
       }));
       return;
     }
@@ -599,7 +582,7 @@ useEffect(() => {
 
     const anonUserId = ensureAnonUserId();
     try {
-      const res = await fetch(`${apiBase}/pro/verify`, {
+      const res = await fetch(verifyUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ anon_user_id: anonUserId, pro_code: trimmed }),
@@ -612,17 +595,14 @@ useEffect(() => {
       const plan = String(data?.plan || (data?.pro ? "PRO" : "FREE")).toUpperCase();
       const isPro = plan === "PRO";
 
-      // expires_at（ms）を優先
       const expiresAtMs =
         Number.isFinite(Number(data?.expires_at)) ? Number(data.expires_at) : null;
 
       const expiresLabel = expiresAtMs ? formatYMD_JP(expiresAtMs) : "";
-      const periodText =
-        expiresLabel
-          ? `有効期限：${expiresLabel}`
-          : String(data?.period || data?.period_text || data?.valid_until || "");
+      const periodText = expiresLabel
+        ? `有効期限：${expiresLabel}`
+        : String(data?.period || data?.period_text || data?.valid_until || "");
 
-      // 既存の制御はそのまま
       const df = defaultsFromProFlag(isPro);
       const maxNotifications = Number.isFinite(Number(data?.max_notifications))
         ? Number(data.max_notifications)
@@ -630,8 +610,7 @@ useEffect(() => {
 
       const timer2Allowed =
         typeof data?.timer2_allowed === "boolean" ? data.timer2_allowed : df.timer2Allowed;
-      const adsOff =
-        typeof data?.ads_off === "boolean" ? data.ads_off : df.adsOff;
+      const adsOff = typeof data?.ads_off === "boolean" ? data.ads_off : df.adsOff;
 
       setProState({
         loading: false,
@@ -640,11 +619,10 @@ useEffect(() => {
         maxNotifications,
         timer2Allowed,
         adsOff,
-        expiresAtMs,             // ← 追加
-        period: periodText,       // ← ここに「有効期限：YYYY/MM/DD」が入る
+        expiresAtMs,
+        period: periodText,
         message: String(data?.message || (isPro ? "PRO" : "無料版")),
       });
-
 
       // PRO→FREEに落ちた時、2つ目タイマーONならOFFに戻す（事故防止）
       if (!isPro) {
@@ -652,7 +630,6 @@ useEffect(() => {
       }
     } catch (e) {
       console.error("[PRO verify error]", e);
-      // エラー時は安全側（FREE）
       setProState((p) => ({
         ...p,
         loading: false,
@@ -696,8 +673,8 @@ useEffect(() => {
   const [testPushState, setTestPushState] = useState({ loading: false, message: "" });
 
   async function sendTestPushAfter5s(token) {
-    const apiBase = getApiBase();
-    if (!apiBase) {
+    const url = apiUrl("/push/test");
+    if (!url) {
       setTestPushState({ loading: false, message: "API未設定のためテストできません（VITE_API_BASE）" });
       return;
     }
@@ -710,7 +687,7 @@ useEffect(() => {
 
     setTestPushState({ loading: true, message: "テスト送信を依頼しました（5秒後に鳴るはず）…" });
     try {
-      const res = await fetch(`${apiBase}/push/test`, {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -734,8 +711,8 @@ useEffect(() => {
 
   // ===== Push token 登録（サーバー保持）=====
   async function postDeviceRegisterIfNeeded(token) {
-    const apiBase = getApiBase();
-    if (!apiBase) return;
+    const url = apiUrl("/devices/register");
+    if (!url) return;
 
     const anonUserId = ensureAnonUserId();
     const t = String(token || "").trim();
@@ -754,7 +731,7 @@ useEffect(() => {
         ts: Date.now(),
       };
 
-      const res = await fetch(`${apiBase}/devices/register`, {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1035,7 +1012,7 @@ useEffect(() => {
             onSendTestPush={sendTestPushAfter5s}
             testPushState={testPushState}
             proState={proState}
-            isPro={isPro}              // ← ★ 追加
+            isPro={isPro}
             onVerifyProCode={verifyProCodeNow}
             maxNotifications={maxNotifications}
             selectedCount={selectedCount}
@@ -1173,6 +1150,7 @@ useEffect(() => {
           onSendTestPush={sendTestPushAfter5s}
           testPushState={testPushState}
           proState={proState}
+          isPro={isPro} /* ★home側にも渡す */
           onVerifyProCode={verifyProCodeNow}
           maxNotifications={maxNotifications}
           selectedCount={selectedCount}
@@ -1194,7 +1172,7 @@ function SettingsModal({
   onSendTestPush,
   testPushState,
   proState,
-  isPro,              // ← ★ 追加
+  isPro,
   onVerifyProCode,
   maxNotifications,
   selectedCount,
@@ -1219,16 +1197,13 @@ function SettingsModal({
 
   const canTest = !!fcmToken && permission === "granted" && !!onSendTestPush;
 
-  const proPeriodLabel = String(proState?.period || "");
   const proStatusLabel = String(proState?.message || "");
 
   const timer2EnabledUI = !!settings.timer2Enabled;
   const timer2ToggleDisabled = !timer2GateOpen;
 
   function resetAllSelections() {
-    // toggledをクリア（通知解除）
     setToggled?.({});
-    // UI互換のためのフラグ（必要なら使う）
     setSettings((s) => ({ ...s, __resetAll: Date.now() }));
   }
 
@@ -1354,13 +1329,10 @@ function SettingsModal({
             </select>
           </div>
 
-          {/* 通知タップ先（LINK_TARGETSと一致） */}
+          {/* 通知タップ先 */}
           <div className="row">
             <div className="label">通知タップ先</div>
-            <select
-              value={settings.linkTarget}
-              onChange={(e) => setSettings((s) => ({ ...s, linkTarget: e.target.value }))}
-            >
+            <select value={settings.linkTarget} onChange={(e) => setSettings((s) => ({ ...s, linkTarget: e.target.value }))}>
               {LINK_TARGETS.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.label}
@@ -1369,7 +1341,7 @@ function SettingsModal({
             </select>
           </div>
 
-          {/* 有料コード（A案：settings.proCode 直結） */}
+          {/* 有料コード */}
           <div className="row">
             <div className="label">コード入力</div>
             <div style={{ display: "grid", gap: 8 }}>
@@ -1383,7 +1355,11 @@ function SettingsModal({
                 <button
                   type="button"
                   className="btn small"
-                  onClick={() => onVerifyProCode?.(settings.proCode)}
+                  onClick={() => {
+                    // 「押したのに無反応」切り分け用ログ
+                    console.log("[UI] PRO送信 click", settings.proCode);
+                    onVerifyProCode?.(settings.proCode);
+                  }}
                   disabled={!!proState?.loading}
                 >
                   {proState?.loading ? "送信中…" : "送信"}
