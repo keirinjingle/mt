@@ -2,19 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { getToken, onMessage } from "firebase/messaging";
 import { messaging, VAPID_KEY } from "./firebase";
 
-/* ===== ここに置く ===== */
-function getApiBase() {
-  return import.meta.env.VITE_API_BASE || window.location.origin;
-}
-
-function apiUrl(path) {
-  const base = getApiBase();
-  if (!base) return "";
-  const p = path.startsWith("/") ? path : `/${path}`;
-  return `${base}/api${p}`;
-}
-/* ===== ここまで ===== */
-
 /**
  * もふタイマー Web（Push通知対応 / 1ファイル App.jsx）
  * - Vite + React
@@ -77,6 +64,13 @@ function setHash(route) {
 function getApiBase() {
   const base = (import.meta?.env?.VITE_API_BASE || "").trim();
   return base ? base.replace(/\/$/, "") : "";
+}
+
+function apiUrl(path) {
+  const base = getApiBase();
+  if (!base) return ""; // API未設定なら空（=呼ばない運用）
+  const p = path.startsWith("/") ? path : `/${path}`;
+  return `${base}/api${p}`;
 }
 
 /* ===== 設定/保存 ===== */
