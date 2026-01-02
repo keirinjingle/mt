@@ -4,22 +4,20 @@ import { messaging, VAPID_KEY } from "./firebase";
 
 /**
  * もふタイマー Web（Push通知対応 / 1ファイル App.jsx）
- * - Vite + React
- * - 本番: mt.qui2.net 直下配信
- * - 当日のみ（GitHub Pages上のJSON）
- * - 会場アコーディオン + レース行トグル（通知選択）
  *
- * 追加:
- * - Hash Routing: #notifications で通知一覧ページ
- * - 通知一覧から削除（localStorage更新 + 可能ならサーバーへ通知）
- * - Push通知は「設定画面の許可ボタン」だけで権限要求（Android事故回避）
- * - token は localStorage に保持し、起動時に permission=granted なら token 再取得→差分があればサーバーへ再送
- * - PRO（有料コード）をAPIで検証（サーバー管理）
+ * 今回の再チェック＋改修点（重要）
+ * 1) 通知タップで「指定サイト」に飛ばすため、サーバーへ notify_url を送る
+ *    - notify_url = getLinkUrl(settings.linkTarget, race.url) の結果
+ *    - link_target も同時に送っておく（将来サーバー側で組み立てたい場合に役立つ）
  *
- * IMPORTANT（今回の修正点）:
- * - すべてのAPI呼び出しURLを apiUrl() 経由に統一（/api 付与のズレを防ぐ）
- * - home側SettingsModalにも isPro を渡す（表示ズレ防止）
- * - PRO送信ボタンとverify開始にconsoleログを追加（「無反応」の切り分けが即できる）
+ * 2) 設定変更（リンク先/タイマー分）を、選択済み通知に反映できるよう “軽い再同期” を追加
+ *    - settings.linkTarget / timer1MinutesBefore / timer2Enabled / timer2MinutesBefore が変わったら
+ *      選択済みレースを subscriptions/set で再送（enabled:true）
+ *    - これで「リンク先変えたのに通知が前のまま」問題を回避しやすい
+ *
+ * 3) PRO送信ボタン押下時、debounce中のverifyをキャンセルして即verify（2重発火の減少）
+ *
+ * 4) apiUrl() 経由の統一は維持（/api 二重や欠落を防ぐ）
  */
 
 const APP_TITLE = "もふタイマー";
@@ -369,12 +367,10 @@ function NotificationsPage({
 }
 
 export default function App() {
-  // タブタイトル
   useEffect(() => {
     document.title = APP_TITLE;
   }, []);
 
-  // anon id
   useEffect(() => {
     ensureAnonUserId();
   }, []);
@@ -413,7 +409,7 @@ export default function App() {
   // PRO状態（サーバー検証結果）
   const [proState, setProState] = useState({
     loading: false,
-    verified: false, // 一度でも検証したか
+    verified: false,
     pro: false,
     maxNotifications: 10,
     timer2Allowed: false,
@@ -485,7 +481,6 @@ export default function App() {
           const url =
             payload?.fcmOptions?.link || payload?.data?.url || "https://mt.qui2.net/#notifications";
 
-          // Service Worker 経由で通知（foregroundでもポップアップ表示）
           const reg = await navigator.serviceWorker?.ready;
           if (reg?.showNotification) {
             await reg.showNotification(title, {
@@ -496,7 +491,6 @@ export default function App() {
             return;
           }
 
-          // 念のためのフォールバック
           new Notification(title, {
             body,
             icon,
@@ -541,7 +535,6 @@ export default function App() {
   async function verifyProCodeNow(code) {
     const trimmed = String(code || "").trim();
 
-    // クリック〜verify開始が動いてるかの切り分けログ
     console.log("[PRO] verify start", {
       code: trimmed,
       apiBase: getApiBase(),
@@ -549,7 +542,6 @@ export default function App() {
       origin: window.location.origin,
     });
 
-    // APIが無い/空ならFREE固定
     const verifyUrl = apiUrl("/pro/verify");
     if (!verifyUrl) {
       setProState((p) => ({
@@ -564,7 +556,6 @@ export default function App() {
       return;
     }
 
-    // 空ならFREE扱い（サーバー呼ばない）
     if (!trimmed) {
       setProState((p) => ({
         ...p,
@@ -591,7 +582,6 @@ export default function App() {
 
       const data = await res.json();
 
-      // 互換：旧 {pro:true} / 新 {plan:"PRO"} どちらでもOKにする
       const plan = String(data?.plan || (data?.pro ? "PRO" : "FREE")).toUpperCase();
       const isPro = plan === "PRO";
 
@@ -624,7 +614,6 @@ export default function App() {
         message: String(data?.message || (isPro ? "PRO" : "無料版")),
       });
 
-      // PRO→FREEに落ちた時、2つ目タイマーONならOFFに戻す（事故防止）
       if (!isPro) {
         setSettings((p) => ({ ...p, timer2Enabled: false }));
       }
@@ -646,7 +635,6 @@ export default function App() {
   // proCode入力が変わったら、少し待ってから検証（打ち終わり想定）
   useEffect(() => {
     const code = settings.proCode;
-
     if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
     verifyTimerRef.current = setTimeout(() => {
       verifyProCodeNow(code);
@@ -664,9 +652,7 @@ export default function App() {
   const maxNotifications =
     Number(proState.maxNotifications || (isPro ? 999 : 10)) || (isPro ? 999 : 10);
 
-  // 「2本目を使える資格」（PRO + allowed）
   const timer2GateOpen = isPro && timer2Allowed;
-  // 「実際に2本目を鳴らす」（資格あり + UIでON）
   const timer2Active = timer2GateOpen && !!settings.timer2Enabled;
 
   // ===== Push テスト送信（5秒後に鳴らす）=====
@@ -719,7 +705,7 @@ export default function App() {
     if (!t) return;
 
     const lastSent = localStorage.getItem(STORAGE_FCM_TOKEN_SENT) || "";
-    if (lastSent === t) return; // 差分なしなら送らない
+    if (lastSent === t) return;
 
     try {
       const payload = {
@@ -751,7 +737,6 @@ export default function App() {
     if (!("serviceWorker" in navigator)) throw new Error("This browser does not support Service Worker.");
     if (!("Notification" in window)) throw new Error("This browser does not support Notification.");
 
-    // SW登録（mt.qui2.net 直下に firebase-messaging-sw.js がある前提）
     const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
 
     const perm = await Notification.requestPermission();
@@ -779,7 +764,6 @@ export default function App() {
 
       await postDeviceRegisterIfNeeded(token);
 
-      // 互換のため（UI表示用にON扱い）
       setSettings((p) => ({ ...p, notificationsEnabled: true }));
     } catch (e) {
       console.error("[Push subscribe error]", e);
@@ -884,21 +868,24 @@ export default function App() {
 
       next[raceKey] = true;
 
-      // ON時に必要データが無ければ送らない（JSON未取得など）
       if (race) {
         const t1 = Number(settings.timer1MinutesBefore);
         const t2 = Number(settings.timer2MinutesBefore);
+
+        // ★ここが今回の核：実際に通知タップで開きたいURL
+        const notifyUrl = getLinkUrl(settings.linkTarget, race.url);
 
         const payload = {
           anon_user_id: anonUserId,
           race_key: raceKey,
           enabled: true,
-          closed_at_hhmm: race.closedAtHHMM, // 締切（HH:MM）
-          race_url: race.url, // 通知タップ先の元URL（JSON由来）
+          closed_at_hhmm: race.closedAtHHMM,
+          race_url: race.url,            // 元URL（JSON由来、互換用）
+          link_target: settings.linkTarget, // どれを選んだか（将来のため）
+          notify_url: notifyUrl,          // ★実際のタップ先
+          notify_url: getLinkUrl(settings.linkTarget, race.url),
           title: `${race.venueName}${race.raceNo}R`,
           timer1_min: Number.isFinite(t1) ? t1 : 5,
-
-          // ★ 2本目は「資格あり + UIでON」の時だけ true
           timer2_enabled: !!timer2Active,
           timer2_min: Number.isFinite(t2) ? t2 : 1,
         };
@@ -926,6 +913,58 @@ export default function App() {
     const anonUserId = ensureAnonUserId();
     await trySendRemoveToServer({ anonUserId, raceKey });
   }
+
+  // ===== 設定変更を “選択済み通知” に反映（軽い再同期）=====
+  const resyncTimerRef = useRef(null);
+  useEffect(() => {
+    const hasApi = !!apiUrl("/subscriptions/set");
+    if (!hasApi) return;
+
+    // 選択が無いなら何もしない
+    const keys = Object.keys(toggled || {});
+    if (keys.length === 0) return;
+
+    // まとめてバタバタ送らないために少し待つ
+    if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
+    resyncTimerRef.current = setTimeout(() => {
+      const anonUserId = ensureAnonUserId();
+      for (const raceKey of keys) {
+        const race = raceMap.get(raceKey);
+        if (!race) continue;
+
+        const t1 = Number(settings.timer1MinutesBefore);
+        const t2 = Number(settings.timer2MinutesBefore);
+        const notifyUrl = getLinkUrl(settings.linkTarget, race.url);
+
+        postSubscriptionSetToServer({
+          anon_user_id: anonUserId,
+          race_key: raceKey,
+          enabled: true,
+          closed_at_hhmm: race.closedAtHHMM,
+          race_url: race.url,
+          link_target: settings.linkTarget,
+          notify_url: notifyUrl,
+          title: `${race.venueName}${race.raceNo}R`,
+          timer1_min: Number.isFinite(t1) ? t1 : 5,
+          timer2_enabled: !!timer2Active,
+          timer2_min: Number.isFinite(t2) ? t2 : 1,
+        });
+      }
+    }, 450);
+
+    return () => {
+      if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
+    };
+    // raceMapは venues依存なので含める
+  }, [
+    settings.linkTarget,
+    settings.timer1MinutesBefore,
+    settings.timer2Enabled,
+    settings.timer2MinutesBefore,
+    timer2Active,
+    toggled,
+    raceMap,
+  ]);
 
   // ===== 共通ヘッダー =====
   function Header({ rightHomeIcon }) {
@@ -1013,7 +1052,11 @@ export default function App() {
             testPushState={testPushState}
             proState={proState}
             isPro={isPro}
-            onVerifyProCode={verifyProCodeNow}
+            onVerifyProCode={(code) => {
+              // ★ボタン押下は即時。debounce中ならキャンセルしてから実行
+              if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
+              verifyProCodeNow(code);
+            }}
             maxNotifications={maxNotifications}
             selectedCount={selectedCount}
             timer2GateOpen={timer2GateOpen}
@@ -1150,8 +1193,11 @@ export default function App() {
           onSendTestPush={sendTestPushAfter5s}
           testPushState={testPushState}
           proState={proState}
-          isPro={isPro} /* ★home側にも渡す */
-          onVerifyProCode={verifyProCodeNow}
+          isPro={isPro}
+          onVerifyProCode={(code) => {
+            if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
+            verifyProCodeNow(code);
+          }}
           maxNotifications={maxNotifications}
           selectedCount={selectedCount}
           timer2GateOpen={timer2GateOpen}
@@ -1356,7 +1402,6 @@ function SettingsModal({
                   type="button"
                   className="btn small"
                   onClick={() => {
-                    // 「押したのに無反応」切り分け用ログ
                     console.log("[UI] PRO送信 click", settings.proCode);
                     onVerifyProCode?.(settings.proCode);
                   }}
@@ -1457,14 +1502,12 @@ const cssText = `
   --card: #FFFFFF;
   --ink: #111111;
 
-  /* ネイティブ寄りの緑（トグルONなど） */
-  --accent: #2E6F3E;      /* 深緑 */
-  --accent2: #E6F1E7;     /* 薄緑 */
+  --accent: #2E6F3E;
+  --accent2: #E6F1E7;
   --border: rgba(0,0,0,0.08);
   --shadow: 0 10px 22px rgba(0,0,0,0.06);
 }
 
-/* --- base --- */
 *{ box-sizing: border-box; }
 html, body{ background: var(--bg); }
 button, input, select{ font: inherit; }
@@ -1489,7 +1532,6 @@ input{ width: 100%; }
   background: rgba(255,240,240,0.92);
 }
 
-/* --- chips --- */
 .chip{
   border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.95);
@@ -1504,7 +1546,6 @@ input{ width: 100%; }
   background: var(--accent2);
 }
 
-/* --- icon buttons --- */
 .iconBtn{
   border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.95);
@@ -1520,7 +1561,6 @@ input{ width: 100%; }
   justify-content: center;
 }
 
-/* --- buttons --- */
 .btn{
   border: 1px solid rgba(0,0,0,0.12);
   background: #fff;
@@ -1544,7 +1584,6 @@ input{ width: 100%; }
   white-space: nowrap;
 }
 
-/* --- ad --- */
 .adBar{
   border: 1px dashed rgba(0,0,0,0.14);
   background: rgba(0,0,0,0.02);
@@ -1554,7 +1593,6 @@ input{ width: 100%; }
 .adText{ font-weight: 900; }
 .adSub{ font-size: 12px; opacity: 0.75; margin-top: 2px; }
 
-/* --- tiny meta --- */
 .tinyMeta{
   display:flex;
   align-items:center;
@@ -1568,7 +1606,6 @@ input{ width: 100%; }
   white-space: nowrap;
 }
 
-/* --- pill --- */
 .pill{
   display:inline-flex;
   align-items:center;
@@ -1589,7 +1626,6 @@ input{ width: 100%; }
   opacity: 0.9;
 }
 
-/* --- venue --- */
 .venueHead{
   display:flex;
   align-items:center;
@@ -1631,7 +1667,6 @@ input{ width: 100%; }
 .smallBtn.on{ background: var(--accent2); border-color: rgba(46,111,62,0.25); }
 .smallBtn.off{ background: rgba(0,0,0,0.02); }
 
-/* --- races --- */
 .raceList{ margin-top: 10px; display:grid; gap: 10px; }
 .raceRow{
   display:flex;
@@ -1682,7 +1717,6 @@ input{ width: 100%; }
   opacity: 0.6;
 }
 
-/* --- toggle --- */
 .toggleWrap{ padding-left: 6px; }
 .toggle{ position: relative; display:inline-block; width: 54px; height: 32px; }
 .toggle input{
@@ -1716,7 +1750,6 @@ input{ width: 100%; }
 }
 .toggle input:checked + .slider:before{ transform: translateX(22px); }
 
-/* --- notifications page --- */
 .pageHead{
   display:flex;
   align-items:center;
@@ -1743,7 +1776,6 @@ input{ width: 100%; }
 .notifyTimes{ margin-top: 8px; display:flex; gap: 8px; flex-wrap: wrap; }
 .notifyRight{ display:flex; gap: 8px; align-items:center; flex: 0 0 auto; }
 
-/* --- modal --- */
 .modalBack{
   position: fixed;
   inset: 0;
@@ -1809,7 +1841,6 @@ input{ width: 100%; }
   .venueName{ max-width: 58vw; }
 }
 
-/* ===== Push: 許可済み行 ===== */
 .pushGrantRow{
   display:flex;
   align-items:center;
@@ -1831,7 +1862,6 @@ input{ width: 100%; }
   z-index: 10001;
 }
 
-/* ===== 設定モーダル上部：クリック阻害対策 ===== */
 .settingsHeader,
 .settingsHeaderRight{
   position: relative;
@@ -1843,7 +1873,6 @@ input{ width: 100%; }
   pointer-events: auto;
 }
 
-/* ===== コード入力行 ===== */
 .codeRow{
   display:flex;
   gap: 10px;
@@ -1859,7 +1888,6 @@ input{ width: 100%; }
   gap: 4px;
 }
 
-/* 閉じるボタン微調整 */
 .closeBtn{
   margin-top: 4px;
 }
