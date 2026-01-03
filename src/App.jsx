@@ -5,19 +5,12 @@ import { messaging, VAPID_KEY } from "./firebase";
 /**
  * もふタイマー Web（Push通知対応 / 1ファイル App.jsx）
  *
- * 今回の再チェック＋改修点（重要）
- * 1) 通知タップで「指定サイト」に飛ばすため、サーバーへ notify_url を送る
- *    - notify_url = getLinkUrl(settings.linkTarget, race.url) の結果
- *    - link_target も同時に送っておく（将来サーバー側で組み立てたい場合に役立つ）
- *
- * 2) 設定変更（リンク先/タイマー分）を、選択済み通知に反映できるよう “軽い再同期” を追加
- *    - settings.linkTarget / timer1MinutesBefore / timer2Enabled / timer2MinutesBefore が変わったら
- *      選択済みレースを subscriptions/set で再送（enabled:true）
- *    - これで「リンク先変えたのに通知が前のまま」問題を回避しやすい
- *
- * 3) PRO送信ボタン押下時、debounce中のverifyをキャンセルして即verify（2重発火の減少）
- *
- * 4) apiUrl() 経由の統一は維持（/api 二重や欠落を防ぐ）
+ * 改修（今回）
+ * - ホームのレース行：時間チップを廃止して
+ *   「1R A級 一般 締切 08:45 レース情報 [toggle]」に変更（テキストリンクは下線）
+ * - 通知一覧：時間チップを廃止して
+ *   「小田原 1R A級 一般 締切 08:45 レース情報 削除」に変更（テキストリンクは下線）
+ * - payload の notify_url 重複を修正（1回だけ）
  */
 
 const APP_TITLE = "もふタイマー";
@@ -264,7 +257,6 @@ function NotificationsPage({
   timer2Active,
   onBack,
   onRemoveRaceKey,
-  onOpenLink,
 }) {
   const raceMap = useMemo(() => {
     const m = new Map();
@@ -280,6 +272,9 @@ function NotificationsPage({
       const r = raceMap.get(rk);
       if (!r) continue;
 
+      const closedAt = parseHHMMToday(r.closedAtHHMM);
+
+      // 互換のため保持（UIは出さないけど計算は残す）
       const n1 = computeNotifyAt(r, settings.timer1MinutesBefore);
       const n2 = timer2Active ? computeNotifyAt(r, settings.timer2MinutesBefore) : null;
 
@@ -288,6 +283,7 @@ function NotificationsPage({
         venueName: r.venueName,
         raceNo: r.raceNo,
         title: r.title,
+        closedAt,
         closedAtHHMM: r.closedAtHHMM,
         url: r.url,
         n1,
@@ -317,41 +313,43 @@ function NotificationsPage({
           <div style={{ opacity: 0.85 }}>通知がありません。</div>
         ) : (
           <div className="notifyList">
-            {rows.map((x) => (
-              <div key={x.raceKey} className="notifyRow">
-                <div className="notifyLeft">
-                  <div className="notifyTop">
-                    <div className="notifyName">
-                      {x.venueName} {x.raceNo}R
-                    </div>
-                    <div className="notifyTitle">{x.title}</div>
-                  </div>
-
-                  <div className="notifyTimes">
-                    <span className="timePill">
-                      締切 <b>{x.closedAtHHMM || "--:--"}</b>
-                    </span>
-                    <span className="timePill">
-                      通知 <b>{x.n1 ? toHHMM(x.n1) : "--:--"}</b>（{settings.timer1MinutesBefore}分前）
-                    </span>
-                    {timer2Active && (
-                      <span className="timePill">
-                        2回目 <b>{x.n2 ? toHHMM(x.n2) : "--:--"}</b>（{settings.timer2MinutesBefore}分前）
+            {rows.map((x) => {
+              const link = getLinkUrl(settings.linkTarget, x.url);
+              return (
+                <div key={x.raceKey} className="notifyRowSimple">
+                  <div className="notifyLeftSimple">
+                    <div className="notifyLine">
+                      <span className="notifyName">
+                        {x.venueName} {x.raceNo}R
                       </span>
-                    )}
+                      <span className="notifyTitle">{x.title}</span>
+
+                      <span className="notifyDeadline">
+                        締切 <b>{x.closedAt ? toHHMM(x.closedAt) : (x.closedAtHHMM || "--:--")}</b>
+                      </span>
+
+                      <a
+                        className="notifyLink"
+                        href={link || "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => {
+                          if (!link) e.preventDefault();
+                        }}
+                      >
+                        レース情報
+                      </a>
+                    </div>
+                  </div>
+
+                  <div className="notifyRightSimple">
+                    <button className="btn danger" onClick={() => onRemoveRaceKey(x.raceKey)}>
+                      削除
+                    </button>
                   </div>
                 </div>
-
-                <div className="notifyRight">
-                  <button className="linkBtn" onClick={() => onOpenLink({ url: x.url })}>
-                    開く
-                  </button>
-                  <button className="btn danger" onClick={() => onRemoveRaceKey(x.raceKey)}>
-                    削除
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -872,19 +870,17 @@ export default function App() {
         const t1 = Number(settings.timer1MinutesBefore);
         const t2 = Number(settings.timer2MinutesBefore);
 
-        // ★ここが今回の核：実際に通知タップで開きたいURL
         const notifyUrl = getLinkUrl(settings.linkTarget, race.url);
 
         const payload = {
           anon_user_id: anonUserId,
           race_key: raceKey,
           enabled: true,
-          race_date: todayKeyYYYYMMDD(), // ★追加
+          race_date: todayKeyYYYYMMDD(),
           closed_at_hhmm: race.closedAtHHMM,
-          race_url: race.url,            // 元URL（JSON由来、互換用）
-          link_target: settings.linkTarget, // どれを選んだか（将来のため）
-          notify_url: notifyUrl,          // ★実際のタップ先
-          notify_url: getLinkUrl(settings.linkTarget, race.url),
+          race_url: race.url,
+          link_target: settings.linkTarget,
+          notify_url: notifyUrl, // ★重複排除
           title: `${race.venueName}${race.raceNo}R`,
           timer1_min: Number.isFinite(t1) ? t1 : 5,
           timer2_enabled: !!timer2Active,
@@ -896,12 +892,6 @@ export default function App() {
 
       return next;
     });
-  }
-
-  function openLinkForRace(race) {
-    const url = getLinkUrl(settings.linkTarget, race.url);
-    if (!url) return;
-    window.open(url, "_blank", "noopener,noreferrer");
   }
 
   async function removeNotification(raceKey) {
@@ -921,11 +911,9 @@ export default function App() {
     const hasApi = !!apiUrl("/subscriptions/set");
     if (!hasApi) return;
 
-    // 選択が無いなら何もしない
     const keys = Object.keys(toggled || {});
     if (keys.length === 0) return;
 
-    // まとめてバタバタ送らないために少し待つ
     if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
     resyncTimerRef.current = setTimeout(() => {
       const anonUserId = ensureAnonUserId();
@@ -956,7 +944,6 @@ export default function App() {
     return () => {
       if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
     };
-    // raceMapは venues依存なので含める
   }, [
     settings.linkTarget,
     settings.timer1MinutesBefore,
@@ -1039,7 +1026,6 @@ export default function App() {
           timer2Active={timer2Active}
           onBack={() => setHash("home")}
           onRemoveRaceKey={removeNotification}
-          onOpenLink={({ url }) => window.open(getLinkUrl(settings.linkTarget, url), "_blank", "noopener,noreferrer")}
         />
 
         {settingsOpen && (
@@ -1054,7 +1040,6 @@ export default function App() {
             proState={proState}
             isPro={isPro}
             onVerifyProCode={(code) => {
-              // ★ボタン押下は即時。debounce中ならキャンセルしてから実行
               if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
               verifyProCodeNow(code);
             }}
@@ -1123,15 +1108,10 @@ export default function App() {
                   <div className="raceList">
                     {v.races.map((r) => {
                       const closedAt = parseHHMMToday(r.closedAtHHMM);
-
-                      const n1 = computeNotifyAt(r, settings.timer1MinutesBefore);
-                      const n2 = timer2Active ? computeNotifyAt(r, settings.timer2MinutesBefore) : null;
-
-                      const past1 = n1 ? now.getTime() >= n1.getTime() : false;
-                      const past2 = n2 ? now.getTime() >= n2.getTime() : false;
-
                       const ended = closedAt ? now.getTime() >= closedAt.getTime() : false;
                       const checked = !!toggled[r.raceKey];
+
+                      const link = getLinkUrl(settings.linkTarget, r.url);
 
                       return (
                         <div key={r.raceKey} className={`raceRow ${ended ? "ended" : ""}`}>
@@ -1139,25 +1119,22 @@ export default function App() {
                             <div className="raceTopLine">
                               <div className="raceNo">{r.raceNo}R</div>
                               <div className="raceTitle">{r.title}</div>
-                              <button className="linkBtn" onClick={() => openLinkForRace(r)}>
-                                開く
-                              </button>
-                            </div>
 
-                            <div className="raceTimeLine">
-                              <span className="timePill">
+                              <div className="raceDeadline">
                                 締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b>
-                              </span>
+                              </div>
 
-                              <span className={`timePill ${past1 ? "timePast" : ""}`}>
-                                通知 <b>{n1 ? toHHMM(n1) : "--:--"}</b>（{settings.timer1MinutesBefore}分前）
-                              </span>
-
-                              {timer2Active && (
-                                <span className={`timePill ${past2 ? "timePast" : ""}`}>
-                                  2回目 <b>{n2 ? toHHMM(n2) : "--:--"}</b>（{settings.timer2MinutesBefore}分前）
-                                </span>
-                              )}
+                              <a
+                                className="raceLink"
+                                href={link || "#"}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  if (!link) e.preventDefault();
+                                }}
+                              >
+                                レース情報
+                              </a>
                             </div>
                           </div>
 
@@ -1575,15 +1552,6 @@ input{ width: 100%; }
   border-color: rgba(220,0,0,0.22);
   background: rgba(255,240,240,0.9);
 }
-.linkBtn{
-  border: 1px solid rgba(0,0,0,0.12);
-  background: rgba(0,0,0,0.03);
-  padding: 8px 12px;
-  border-radius: 999px;
-  cursor: pointer;
-  font-weight: 900;
-  white-space: nowrap;
-}
 
 .adBar{
   border: 1px dashed rgba(0,0,0,0.14);
@@ -1688,6 +1656,7 @@ input{ width: 100%; }
   display:flex;
   align-items:center;
   gap: 10px;
+  flex-wrap: wrap; /* ★追加：iPhoneで折り返し */
 }
 .raceNo{
   font-weight: 900;
@@ -1700,23 +1669,20 @@ input{ width: 100%; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.raceTimeLine{
-  margin-top: 8px;
-  display:flex;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-.timePill{
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.92);
-  border-radius: 999px;
-  padding: 6px 10px;
+.raceDeadline{
   font-size: 12px;
+  opacity: 0.85;
   white-space: nowrap;
 }
-.timePast{
-  opacity: 0.6;
+.raceLink{
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--ink);
+  text-decoration: underline; /* ★下線 */
+  white-space: nowrap;
+  cursor: pointer;
 }
+.raceLink:hover{ opacity: 0.7; }
 
 .toggleWrap{ padding-left: 6px; }
 .toggle{ position: relative; display:inline-block; width: 54px; height: 32px; }
@@ -1760,9 +1726,11 @@ input{ width: 100%; }
 }
 .pageTitle{ font-size: 16px; font-weight: 900; }
 .notifyList{ display:grid; gap: 10px; }
-.notifyRow{
+
+/* 通知一覧：シンプル行 */
+.notifyRowSimple{
   display:flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
   border: 1px solid rgba(0,0,0,0.08);
@@ -1770,12 +1738,37 @@ input{ width: 100%; }
   border-radius: 16px;
   padding: 10px;
 }
-.notifyLeft{ flex: 1 1 auto; min-width: 0; }
-.notifyTop{ display:flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.notifyLeftSimple{ flex: 1 1 auto; min-width: 0; }
+.notifyRightSimple{ flex: 0 0 auto; display:flex; align-items:center; gap: 8px; }
+
+.notifyLine{
+  display:flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .notifyName{ font-weight: 900; white-space: nowrap; }
-.notifyTitle{ font-weight: 800; min-width: 0; overflow:hidden; text-overflow: ellipsis; white-space: nowrap; }
-.notifyTimes{ margin-top: 8px; display:flex; gap: 8px; flex-wrap: wrap; }
-.notifyRight{ display:flex; gap: 8px; align-items:center; flex: 0 0 auto; }
+.notifyTitle{
+  font-weight: 800;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.notifyDeadline{
+  font-size: 12px;
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.notifyLink{
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--ink);
+  text-decoration: underline;
+  white-space: nowrap;
+}
+.notifyLink:hover{ opacity: 0.7; }
 
 .modalBack{
   position: fixed;
