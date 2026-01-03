@@ -879,6 +879,7 @@ export default function App() {
           anon_user_id: anonUserId,
           race_key: raceKey,
           enabled: true,
+          race_date: todayKeyYYYYMMDD(), // ★追加
           closed_at_hhmm: race.closedAtHHMM,
           race_url: race.url,            // 元URL（JSON由来、互換用）
           link_target: settings.linkTarget, // どれを選んだか（将来のため）
