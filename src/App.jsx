@@ -3,7 +3,8 @@ import { getToken, onMessage } from "firebase/messaging";
 import { messaging, VAPID_KEY } from "./firebase";
 
 /**
- * もふタイマー Web（選手名表示 + ガールズ一括 + テキスト出力）
+ * もふタイマー Web
+ * 改修：ガールズアコーディオン(個別選択) + テキスト出力URL削除 + 選手名表示
  */
 
 const APP_TITLE = "もふタイマー";
@@ -48,8 +49,8 @@ const DEFAULT_SETTINGS = {
   timer1MinutesBefore: 5,
   timer2Enabled: false,
   timer2MinutesBefore: 2,
-  linkTarget: "json", // 競輪用
-  linkTargetAuto: "autoracejp", // オート用
+  linkTarget: "json",
+  linkTargetAuto: "autoracejp",
   proCode: "",
   notificationsEnabled: false,
 };
@@ -73,43 +74,27 @@ const LINK_TARGETS_AUTO = [
 ];
 
 function getLinkUrl(linkTargetKey, raceUrlFromJson, mode) {
-  // --- オートレース ---
   if (mode === MODE_AUTORACE) {
     switch (linkTargetKey) {
-      case "autoracejp":
-        return "https://autorace.jp/";
-      case "oddspark":
-        return "https://www.oddspark.com/autorace/";
-      case "chariloto":
-        return "https://www.chariloto.com/autorace";
-      case "winticket":
-        return "https://www.winticket.jp/autorace/";
-      case "json":
-      default:
-        return raceUrlFromJson || "";
+      case "autoracejp": return "https://autorace.jp/";
+      case "oddspark": return "https://www.oddspark.com/autorace/";
+      case "chariloto": return "https://www.chariloto.com/autorace";
+      case "winticket": return "https://www.winticket.jp/autorace/";
+      case "json": default: return raceUrlFromJson || "";
     }
   }
-  // --- 競輪 ---
   switch (linkTargetKey) {
-    case "json":
-      return raceUrlFromJson || "";
-    case "oddspark":
-      return "https://www.oddspark.com/";
-    case "chariloto":
-      return "https://www.chariloto.com/keirin";
-    case "winticket":
-      return "https://www.winticket.jp/keirin/";
-    case "dmm":
-      return "https://keirin.dmm.com/";
-    default:
-      return raceUrlFromJson || "";
+    case "json": return raceUrlFromJson || "";
+    case "oddspark": return "https://www.oddspark.com/";
+    case "chariloto": return "https://www.chariloto.com/keirin";
+    case "winticket": return "https://www.winticket.jp/keirin/";
+    case "dmm": return "https://keirin.dmm.com/";
+    default: return raceUrlFromJson || "";
   }
 }
 
 /* ===== Util ===== */
-function pad2(n) {
-  return String(n).padStart(2, "0");
-}
+function pad2(n) { return String(n).padStart(2, "0"); }
 function todayKeyYYYYMMDD() {
   const d = new Date();
   return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
@@ -201,20 +186,12 @@ function normalizeToVenues(raw, mode) {
 function normalizeRace(r, mode, v, ri) {
   const venueName = (v && v.venueName) || r.venue || r.venueName || "会場";
   const venueKey = (v && v.venueKey) || `${mode}_${venueName}`;
-
-  const raceNo =
-    Number(r.race_number ?? r.raceNo ?? r.race_no ?? r.race ?? r.no ?? (ri + 1)) || (ri + 1);
-
-  const closedAtHHMM =
-    r.closed_at || r.closedAt || r.close_at || r.closeAt || r.deadline || r.shimekiri || "";
-
+  const raceNo = Number(r.race_number ?? r.raceNo ?? r.race_no ?? r.race ?? r.no ?? (ri + 1)) || (ri + 1);
+  const closedAtHHMM = r.closed_at || r.closedAt || r.close_at || r.closeAt || r.deadline || r.shimekiri || "";
   const url = r.url || r.raceUrl || "";
   const title = r.class_category || r.title || r.name || `${raceNo}R`;
-
   const date = todayKeyYYYYMMDD();
   const raceKey = `${date}_${venueKey}_${pad2(raceNo)}`;
-
-  // ★追加: 選手データとクラスカテゴリ
   const players = Array.isArray(r.players) ? r.players : [];
   const classCategory = r.class_category || r.classCategory || "";
 
@@ -252,15 +229,8 @@ async function postSubscriptionSetToServer(payload) {
 }
 
 /* ===== ページ：通知一覧 ===== */
-function NotificationsPage({
-  venues,
-  toggled,
-  settings,
-  onBack,
-  onRemoveRaceKey,
-}) {
+function NotificationsPage({ venues, toggled, settings, onBack, onRemoveRaceKey }) {
   const [showText, setShowText] = useState(false);
-
   const raceMap = useMemo(() => {
     const m = new Map();
     for (const v of venues) for (const r of v.races) m.set(r.raceKey, r);
@@ -293,17 +263,14 @@ function NotificationsPage({
     return list;
   }, [selectedRaceKeys, raceMap]);
 
+  // ★修正：URLを削除し、シンプルなリストに
   const textData = useMemo(() => {
     return rows
       .map((r) => {
-        // テキスト表示用URL
-        const targetKey =
-          r.mode === MODE_AUTORACE ? settings.linkTargetAuto : settings.linkTarget;
-        const link = getLinkUrl(targetKey, r.url, r.mode);
-        return `${r.venueName} ${r.raceNo}R ${r.closedAtHHMM}締切\n${link}`;
+        return `${r.venueName} ${r.raceNo}R ${r.closedAtHHMM}締切`;
       })
-      .join("\n\n");
-  }, [rows, settings]);
+      .join("\n");
+  }, [rows]);
 
   return (
     <main style={styles.main}>
@@ -311,79 +278,49 @@ function NotificationsPage({
         <div className="pageHead">
           <div className="pageTitle">通知一覧</div>
           <div style={{ display: "flex", gap: 8 }}>
-            <button
-              className={`smallBtn ${showText ? "on" : ""}`}
-              onClick={() => setShowText(!showText)}
-            >
+            <button className={`smallBtn ${showText ? "on" : ""}`} onClick={() => setShowText(!showText)}>
               テキスト表示
             </button>
-            <button className="btn" onClick={onBack}>
-              戻る
-            </button>
+            <button className="btn" onClick={onBack}>戻る</button>
           </div>
         </div>
-
         {showText && (
           <div style={{ marginBottom: 16 }}>
             <textarea
               readOnly
               style={{
-                width: "100%",
-                height: 200,
-                fontSize: 13,
-                padding: 8,
-                borderRadius: 8,
-                border: "1px solid #ccc",
-                background: "#f9f9f9",
+                width: "100%", height: 200, fontSize: 13, padding: 8,
+                borderRadius: 8, border: "1px solid #ccc", background: "#f9f9f9",
               }}
               value={textData}
             />
-            <div style={{ fontSize: 12, opacity: 0.7, textAlign: "right" }}>
-              コピーして使ってください
-            </div>
+            <div style={{ fontSize: 12, opacity: 0.7, textAlign: "right" }}>コピーして使ってください</div>
           </div>
         )}
-
         {rows.length === 0 ? (
           <div style={{ opacity: 0.85 }}>通知がありません。</div>
         ) : (
           <div className="notifyList">
             {rows.map((x) => {
-              const targetKey =
-                x.mode === MODE_AUTORACE ? settings.linkTargetAuto : settings.linkTarget;
+              const targetKey = x.mode === MODE_AUTORACE ? settings.linkTargetAuto : settings.linkTarget;
               const link = getLinkUrl(targetKey, x.url, x.mode);
-
               return (
                 <div key={x.raceKey} className="notifyRowSimple">
                   <div className="notifyLeftSimple">
                     <div className="notifyLine">
-                      <span className="notifyName">
-                        {x.venueName} {x.raceNo}R
-                      </span>
+                      <span className="notifyName">{x.venueName} {x.raceNo}R</span>
                       <span className="notifyTitle">{x.title}</span>
-
-                      <span className="notifyDeadline">
-                        締切 <b>{x.closedAt ? toHHMM(x.closedAt) : (x.closedAtHHMM || "--:--")}</b>
-                      </span>
-
+                      <span className="notifyDeadline">締切 <b>{x.closedAt ? toHHMM(x.closedAt) : (x.closedAtHHMM || "--:--")}</b></span>
                       <a
-                        className="notifyLink"
-                        href={link || "#"}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={(e) => {
-                          if (!link) e.preventDefault();
-                        }}
+                        className="notifyLink" href={link || "#"} target="_blank" rel="noopener noreferrer"
+                        onClick={(e) => { if (!link) e.preventDefault(); }}
                       >
                         レース情報
                       </a>
                     </div>
                   </div>
-
                   <div className="notifyRightSimple">
-                    <button className="btn danger" onClick={() => onRemoveRaceKey(x.raceKey)}>
-                      削除
-                    </button>
+                    <button className="btn danger" onClick={() => onRemoveRaceKey(x.raceKey)}>削除</button>
                   </div>
                 </div>
               );
@@ -391,7 +328,6 @@ function NotificationsPage({
           </div>
         )}
       </section>
-
       <section className="card">
         <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.6 }}>
           ・「削除」は端末内の通知リストから外します。<br />
@@ -403,15 +339,8 @@ function NotificationsPage({
 }
 
 export default function App() {
-  useEffect(() => {
-    document.title = APP_TITLE;
-  }, []);
-
-  useEffect(() => {
-    ensureAnonUserId();
-  }, []);
-
-  /* route */
+  useEffect(() => { document.title = APP_TITLE; }, []);
+  useEffect(() => { ensureAnonUserId(); }, []);
   const [route, setRoute] = useState(getRouteFromHash());
   useEffect(() => {
     const onHash = () => setRoute(getRouteFromHash());
@@ -423,122 +352,87 @@ export default function App() {
   const [venues, setVenues] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [openVenues, setOpenVenues] = useState(() => safeJsonParse(localStorage.getItem(STORAGE_OPEN_VENUES) || "{}", {}));
+  
+  // ★ガールズ用アコーディオン開閉
+  const [girlsAccordionOpen, setGirlsAccordionOpen] = useState(false);
 
-  const [openVenues, setOpenVenues] = useState(() =>
-    safeJsonParse(localStorage.getItem(STORAGE_OPEN_VENUES) || "{}", {})
-  );
-  const [toggled, setToggled] = useState(() =>
-    safeJsonParse(localStorage.getItem(STORAGE_TOGGLED) || "{}", {})
-  );
-
+  const [toggled, setToggled] = useState(() => safeJsonParse(localStorage.getItem(STORAGE_TOGGLED) || "{}", {}));
   const [settings, setSettings] = useState(() => {
     const stored = safeJsonParse(localStorage.getItem(STORAGE_SETTINGS) || "null", null);
     return { ...DEFAULT_SETTINGS, ...(stored || {}) };
   });
-
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const [fcmToken, setFcmToken] = useState(() => localStorage.getItem(STORAGE_FCM_TOKEN) || "");
 
-  // PRO状態
   const [proState, setProState] = useState({
-    loading: false,
-    verified: false,
-    pro: false,
-    maxNotifications: 10,
-    timer2Allowed: false,
-    adsOff: false,
-    expiresAtMs: null,
-    period: "",
-    message: "",
+    loading: false, verified: false, pro: false, maxNotifications: 10,
+    timer2Allowed: false, adsOff: false, expiresAtMs: null, period: "", message: "",
   });
 
-  // 時刻更新
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 30 * 1000);
     return () => clearInterval(t);
   }, []);
 
-  // データ取得
   useEffect(() => {
     let alive = true;
-    setLoading(true);
-    setErr("");
+    setLoading(true); setErr("");
     fetchRacesJson(mode)
-      .then((j) => {
-        if (!alive) return;
-        setVenues(normalizeToVenues(j, mode));
-      })
-      .catch((e) => {
-        if (!alive) return;
-        setErr(String(e?.message || e));
-        setVenues([]);
-      })
-      .finally(() => {
-        if (!alive) return;
-        setLoading(false);
-      });
-    return () => {
-      alive = false;
-    };
+      .then((j) => { if (alive) setVenues(normalizeToVenues(j, mode)); })
+      .catch((e) => { if (alive) { setErr(String(e?.message || e)); setVenues([]); } })
+      .finally(() => { if (alive) setLoading(false); });
+    return () => { alive = false; };
   }, [mode]);
 
-  // 永続化
-  useEffect(() => {
-    localStorage.setItem(STORAGE_OPEN_VENUES, JSON.stringify(openVenues));
-  }, [openVenues]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_TOGGLED, JSON.stringify(toggled));
-  }, [toggled]);
-  useEffect(() => {
-    localStorage.setItem(STORAGE_SETTINGS, JSON.stringify(settings));
-  }, [settings]);
-  useEffect(() => {
-    if (fcmToken) localStorage.setItem(STORAGE_FCM_TOKEN, fcmToken);
-  }, [fcmToken]);
+  useEffect(() => { localStorage.setItem(STORAGE_OPEN_VENUES, JSON.stringify(openVenues)); }, [openVenues]);
+  useEffect(() => { localStorage.setItem(STORAGE_TOGGLED, JSON.stringify(toggled)); }, [toggled]);
+  useEffect(() => { localStorage.setItem(STORAGE_SETTINGS, JSON.stringify(settings)); }, [settings]);
+  useEffect(() => { if (fcmToken) localStorage.setItem(STORAGE_FCM_TOKEN, fcmToken); }, [fcmToken]);
 
-  // foreground message
   useEffect(() => {
     try {
       async function showForegroundNotification(payload) {
-        try {
-          if (!payload) return;
-          if (!("Notification" in window)) return;
-          if (Notification.permission !== "granted") return;
-          const title = payload?.notification?.title || payload?.data?.title || "もふタイマー";
-          const body = payload?.notification?.body || payload?.data?.body || "";
-          const icon = payload?.notification?.icon || payload?.data?.icon;
-          const url =
-            payload?.fcmOptions?.link || payload?.data?.url || "https://mt.qui2.net/#notifications";
-          const tag = payload?.data?.race_key || undefined;
-          const options = {
-            body,
-            icon,
-            data: { ...(payload?.data || {}), url },
-            tag,
-            renotify: true,
-          };
-          const reg = await navigator.serviceWorker?.ready;
-          if (reg?.showNotification) {
-            await reg.showNotification(title, options);
-            return;
-          }
-          new Notification(title, options);
-        } catch {
-          // ignore
-        }
+        if (!payload || !("Notification" in window) || Notification.permission !== "granted") return;
+        const title = payload?.notification?.title || payload?.data?.title || "もふタイマー";
+        const body = payload?.notification?.body || payload?.data?.body || "";
+        const icon = payload?.notification?.icon || payload?.data?.icon;
+        const url = payload?.fcmOptions?.link || payload?.data?.url || "https://mt.qui2.net/#notifications";
+        const tag = payload?.data?.race_key || undefined;
+        const options = { body, icon, data: { ...(payload?.data || {}), url }, tag, renotify: true };
+        const reg = await navigator.serviceWorker?.ready;
+        if (reg?.showNotification) { await reg.showNotification(title, options); return; }
+        new Notification(title, options);
       }
-      const unsub = onMessage(messaging, (payload) => {
-        showForegroundNotification(payload);
-      });
+      const unsub = onMessage(messaging, (payload) => { showForegroundNotification(payload); });
       return () => unsub();
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }, []);
 
   const todayLabel = useMemo(() => toYYYYMMDD(new Date()), []);
   const selectedCount = useMemo(() => Object.keys(toggled).length, [toggled]);
+
+  // ★ガールズレース抽出
+  const girlsRacesList = useMemo(() => {
+    if (mode !== MODE_KEIRIN) return [];
+    const list = [];
+    for (const v of venues) {
+      for (const r of v.races) {
+        if (r.classCategory && r.classCategory.includes("Ｌ級")) {
+          // 表示用にvenueNameも持たせる
+          list.push({ ...r, venueName: v.venueName });
+        }
+      }
+    }
+    // 時間順にソート
+    list.sort((a, b) => {
+      const ta = parseHHMMToday(a.closedAtHHMM)?.getTime() || 0;
+      const tb = parseHHMMToday(b.closedAtHHMM)?.getTime() || 0;
+      return ta - tb;
+    });
+    return list;
+  }, [venues, mode]);
 
   const raceMap = useMemo(() => {
     const m = new Map();
@@ -546,196 +440,110 @@ export default function App() {
     return m;
   }, [venues]);
 
-  // ===== PRO検証 =====
+  // PRO verify
   const verifyTimerRef = useRef(null);
   function defaultsFromProFlag(isPro) {
-    return {
-      maxNotifications: isPro ? 999 : 10,
-      timer2Allowed: !!isPro,
-      adsOff: !!isPro,
-    };
+    return { maxNotifications: isPro ? 999 : 10, timer2Allowed: !!isPro, adsOff: !!isPro };
   }
   async function verifyProCodeNow(code) {
     const trimmed = String(code || "").trim();
     const verifyUrl = apiUrl("/pro/verify");
     if (!verifyUrl) {
-      setProState((p) => ({
-        ...p,
-        loading: false,
-        verified: true,
-        pro: false,
-        ...defaultsFromProFlag(false),
-        period: "",
-        message: "無料版（API未設定）",
-      }));
+      setProState((p) => ({ ...p, loading: false, verified: true, pro: false, ...defaultsFromProFlag(false), period: "", message: "無料版（API未設定）" }));
       return;
     }
     if (!trimmed) {
-      setProState((p) => ({
-        ...p,
-        loading: false,
-        verified: true,
-        pro: false,
-        ...defaultsFromProFlag(false),
-        period: "",
-        message: "",
-      }));
+      setProState((p) => ({ ...p, loading: false, verified: true, pro: false, ...defaultsFromProFlag(false), period: "", message: "" }));
       return;
     }
     setProState((p) => ({ ...p, loading: true, message: "" }));
     const anonUserId = ensureAnonUserId();
     try {
       const res = await fetch(verifyUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ anon_user_id: anonUserId, pro_code: trimmed }),
       });
-      if (!res.ok) throw new Error(`verify failed: ${res.status}`);
+      if (!res.ok) throw new Error("failed");
       const data = await res.json();
       const plan = String(data?.plan || (data?.pro ? "PRO" : "FREE")).toUpperCase();
       const isPro = plan === "PRO";
-      const expiresAtMs =
-        Number.isFinite(Number(data?.expires_at)) ? Number(data.expires_at) : null;
+      const expiresAtMs = Number.isFinite(Number(data?.expires_at)) ? Number(data.expires_at) : null;
       const expiresLabel = expiresAtMs ? formatYMD_JP(expiresAtMs) : "";
-      const periodText = expiresLabel
-        ? `有効期限：${expiresLabel}`
-        : String(data?.period || data?.period_text || data?.valid_until || "");
+      const periodText = expiresLabel ? `有効期限：${expiresLabel}` : String(data?.period || "");
       const df = defaultsFromProFlag(isPro);
-      const maxNotifications = Number.isFinite(Number(data?.max_notifications))
-        ? Number(data.max_notifications)
-        : df.maxNotifications;
-      const timer2Allowed =
-        typeof data?.timer2_allowed === "boolean" ? data.timer2_allowed : df.timer2Allowed;
-      const adsOff = typeof data?.ads_off === "boolean" ? data.ads_off : df.adsOff;
       setProState({
-        loading: false,
-        verified: true,
-        pro: isPro,
-        maxNotifications,
-        timer2Allowed,
-        adsOff,
-        expiresAtMs,
-        period: periodText,
-        message: String(data?.message || (isPro ? "PRO" : "無料版")),
+        loading: false, verified: true, pro: isPro,
+        maxNotifications: Number(data?.max_notifications) || df.maxNotifications,
+        timer2Allowed: typeof data?.timer2_allowed === "boolean" ? data.timer2_allowed : df.timer2Allowed,
+        adsOff: typeof data?.ads_off === "boolean" ? data.ads_off : df.adsOff,
+        expiresAtMs, period: periodText, message: String(data?.message || (isPro ? "PRO" : "無料版")),
       });
-      if (!isPro) {
-        setSettings((p) => ({ ...p, timer2Enabled: false }));
-      }
-    } catch (e) {
-      setProState((p) => ({
-        ...p,
-        loading: false,
-        verified: true,
-        pro: false,
-        ...defaultsFromProFlag(false),
-        period: "",
-        message: "検証に失敗しました",
-      }));
+      if (!isPro) setSettings((p) => ({ ...p, timer2Enabled: false }));
+    } catch {
+      setProState((p) => ({ ...p, loading: false, verified: true, pro: false, ...defaultsFromProFlag(false), period: "", message: "検証失敗" }));
       setSettings((p) => ({ ...p, timer2Enabled: false }));
     }
   }
   useEffect(() => {
-    const code = settings.proCode;
     if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
-    verifyTimerRef.current = setTimeout(() => {
-      verifyProCodeNow(code);
-    }, 600);
-    return () => {
-      if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
-    };
+    verifyTimerRef.current = setTimeout(() => verifyProCodeNow(settings.proCode), 600);
+    return () => { if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current); };
   }, [settings.proCode]);
 
   const isPro = !!proState.pro;
   const timer2Allowed = !!proState.timer2Allowed;
   const adsOff = !!proState.adsOff;
-  const maxNotifications =
-    Number(proState.maxNotifications || (isPro ? 999 : 10)) || (isPro ? 999 : 10);
+  const maxNotifications = Number(proState.maxNotifications || 10);
   const timer2GateOpen = isPro && timer2Allowed;
   const timer2Active = timer2GateOpen && !!settings.timer2Enabled;
 
-  // ===== Push テスト送信 =====
   const [testPushState, setTestPushState] = useState({ loading: false, message: "" });
   async function sendTestPushAfter5s(token) {
     const url = apiUrl("/push/test");
-    if (!url) {
-      setTestPushState({ loading: false, message: "API未設定" });
-      return;
-    }
+    if (!url) { setTestPushState({ loading: false, message: "API未設定" }); return; }
     const anonUserId = ensureAnonUserId();
     const t = String(token || "").trim();
     setTestPushState({ loading: true, message: "送信中..." });
     try {
       const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          anon_user_id: anonUserId,
-          token: t,
-          delay_sec: 5,
-          url: `${window.location.origin}/#notifications`,
-        }),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ anon_user_id: anonUserId, token: t, delay_sec: 5, url: `${window.location.origin}/#notifications` }),
       });
-      if (!res.ok) throw new Error("failed");
+      if (!res.ok) throw new Error();
       setTestPushState({ loading: false, message: "OK" });
-    } catch (e) {
-      setTestPushState({ loading: false, message: "失敗" });
-    }
+    } catch { setTestPushState({ loading: false, message: "失敗" }); }
   }
 
-  // ===== Push token 登録 =====
   async function postDeviceRegisterIfNeeded(token) {
     const url = apiUrl("/devices/register");
     if (!url) return;
     const anonUserId = ensureAnonUserId();
     const t = String(token || "").trim();
-    if (!t) return;
-    const lastSent = localStorage.getItem(STORAGE_FCM_TOKEN_SENT) || "";
-    if (lastSent === t) return;
+    if (!t || localStorage.getItem(STORAGE_FCM_TOKEN_SENT) === t) return;
     try {
-      const payload = {
-        anon_user_id: anonUserId,
-        token: t,
-        platform: "web",
-        ua: navigator.userAgent,
-        origin: window.location.origin,
-        ts: Date.now(),
-      };
       await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ anon_user_id: anonUserId, token: t, platform: "web", ua: navigator.userAgent, origin: window.location.origin, ts: Date.now() }),
       });
       localStorage.setItem(STORAGE_FCM_TOKEN_SENT, t);
-      localStorage.setItem(STORAGE_FCM_TOKEN_SENT_AT, String(Date.now()));
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }
-
   async function requestPushPermissionAndRegister() {
     try {
       const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
       const perm = await Notification.requestPermission();
       if (perm !== "granted") return;
-      const token = await getToken(messaging, {
-        vapidKey: VAPID_KEY,
-        serviceWorkerRegistration: reg,
-      });
+      const token = await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
       if (!token) return;
-      setFcmToken(token);
-      localStorage.setItem(STORAGE_FCM_TOKEN, token);
+      setFcmToken(token); localStorage.setItem(STORAGE_FCM_TOKEN, token);
       await postDeviceRegisterIfNeeded(token);
       setSettings((p) => ({ ...p, notificationsEnabled: true }));
-    } catch (e) {
-      alert("失敗: " + e);
-    }
+    } catch (e) { alert("失敗: " + e); }
   }
 
-  // ===== 選択ロジック =====
   function toggleVenueOpen(venueKey) {
     setOpenVenues((prev) => ({ ...prev, [venueKey]: !prev[venueKey] }));
   }
-
   function setVenueAll(venue, on) {
     setToggled((prev) => {
       const next = { ...prev };
@@ -750,19 +558,16 @@ export default function App() {
         next[r.raceKey] = true;
         remaining -= 1;
       }
-      if (remaining <= 0 && Object.keys(next).length >= maxNotifications) {
-        alert(`通知は最大 ${maxNotifications} 件までです。`);
-      }
+      if (remaining <= 0 && Object.keys(next).length >= maxNotifications) alert(`上限 ${maxNotifications}件`);
       return next;
     });
   }
 
-  // ★ガールズ一括切り替え機能
-  function toggleGirlsRaces(on) {
+  // ★一括切替 (ガールズ)
+  function toggleGirlsAll(on) {
     setToggled((prev) => {
       const next = { ...prev };
-      
-      // まず対象レースを抽出 (venues内、classCategoryに"Ｌ級"が含まれるもの)
+      // 対象レースを抽出
       const targetRaces = [];
       for (const v of venues) {
         for (const r of v.races) {
@@ -771,24 +576,18 @@ export default function App() {
           }
         }
       }
-
       if (!on) {
-        // OFFにする
         for (const r of targetRaces) delete next[r.raceKey];
         return next;
       }
-
-      // ONにする（上限チェック）
       let remaining = Math.max(0, maxNotifications - Object.keys(next).length);
       for (const r of targetRaces) {
-        if (next[r.raceKey]) continue; // 既にONならスルー
+        if (next[r.raceKey]) continue;
         if (remaining <= 0) break;
         next[r.raceKey] = true;
         remaining -= 1;
       }
-      if (remaining <= 0 && Object.keys(next).length >= maxNotifications) {
-        alert(`通知は最大 ${maxNotifications} 件までです。`);
-      }
+      if (remaining <= 0 && Object.keys(next).length >= maxNotifications) alert(`上限 ${maxNotifications}件`);
       return next;
     });
   }
@@ -798,19 +597,12 @@ export default function App() {
     const race = raceMap.get(raceKey);
     setToggled((prev) => {
       const next = { ...prev };
-      // OFF
       if (next[raceKey]) {
         delete next[raceKey];
-        postSubscriptionSetToServer({
-          anon_user_id: anonUserId,
-          race_key: raceKey,
-          enabled: false,
-        });
+        postSubscriptionSetToServer({ anon_user_id: anonUserId, race_key: raceKey, enabled: false });
         return next;
       }
-      // ON
-      const currentCount = Object.keys(next).length;
-      if (currentCount >= maxNotifications) {
+      if (Object.keys(next).length >= maxNotifications) {
         alert(`通知は最大 ${maxNotifications} 件までです。`);
         return next;
       }
@@ -822,18 +614,12 @@ export default function App() {
         const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
         const notifyUrl = getLinkUrl(targetKey, race.url, race.mode);
         const payload = {
-          anon_user_id: anonUserId,
-          race_key: raceKey,
-          enabled: true,
-          race_date: todayKeyYYYYMMDD(),
-          closed_at_hhmm: race.closedAtHHMM,
-          race_url: race.url,
-          link_target: targetKey,
-          notify_url: notifyUrl,
+          anon_user_id: anonUserId, race_key: raceKey, enabled: true,
+          race_date: todayKeyYYYYMMDD(), closed_at_hhmm: race.closedAtHHMM,
+          race_url: race.url, link_target: targetKey, notify_url: notifyUrl,
           title: `${race.venueName}${race.raceNo}R`,
           timer1_min: Number.isFinite(t1) ? t1 : 5,
-          timer2_enabled: !!timer2Active,
-          timer2_min: Number.isFinite(t2) ? t2 : 1,
+          timer2_enabled: !!timer2Active, timer2_min: Number.isFinite(t2) ? t2 : 1,
         };
         postSubscriptionSetToServer(payload);
       }
@@ -843,9 +629,7 @@ export default function App() {
 
   async function removeNotification(raceKey) {
     setToggled((prev) => {
-      const next = { ...prev };
-      delete next[raceKey];
-      return next;
+      const next = { ...prev }; delete next[raceKey]; return next;
     });
     const anonUserId = ensureAnonUserId();
     await trySendRemoveToServer({ anonUserId, raceKey });
@@ -870,23 +654,16 @@ export default function App() {
         const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
         const notifyUrl = getLinkUrl(targetKey, race.url, race.mode);
         postSubscriptionSetToServer({
-          anon_user_id: anonUserId,
-          race_key: raceKey,
-          enabled: true,
-          closed_at_hhmm: race.closedAtHHMM,
-          race_url: race.url,
-          link_target: targetKey,
-          notify_url: notifyUrl,
+          anon_user_id: anonUserId, race_key: raceKey, enabled: true,
+          closed_at_hhmm: race.closedAtHHMM, race_url: race.url,
+          link_target: targetKey, notify_url: notifyUrl,
           title: `${race.venueName}${race.raceNo}R`,
           timer1_min: Number.isFinite(t1) ? t1 : 5,
-          timer2_enabled: !!timer2Active,
-          timer2_min: Number.isFinite(t2) ? t2 : 1,
+          timer2_enabled: !!timer2Active, timer2_min: Number.isFinite(t2) ? t2 : 1,
         });
       }
     }, 450);
-    return () => {
-      if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
-    };
+    return () => { if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current); };
   }, [settings, timer2Active, toggled, raceMap]);
 
   // ===== Header =====
@@ -895,44 +672,26 @@ export default function App() {
       <header style={styles.header}>
         <div style={styles.headerTop}>
           <div style={styles.titleRow}>
-            <div style={styles.title}>
-              {APP_TITLE} <span style={{ opacity: 0.9 }}>🐾</span>
-            </div>
+            <div style={styles.title}>{APP_TITLE} <span style={{ opacity: 0.9 }}>🐾</span></div>
             <div style={styles.dateInline}>{todayLabel}</div>
           </div>
           <div style={styles.rightHead}>
-            <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">
-              ⚙︎
-            </button>
+            <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">⚙︎</button>
             {rightHomeIcon === "notifications" ? (
-              <button className="iconBtn" onClick={() => setHash("notifications")} aria-label="notifications">
-                ☰
-              </button>
+              <button className="iconBtn" onClick={() => setHash("notifications")} aria-label="notifications">☰</button>
             ) : (
-              <button className="iconBtn" onClick={() => setHash("home")} aria-label="home">
-                ⌂
-              </button>
+              <button className="iconBtn" onClick={() => setHash("home")} aria-label="home">⌂</button>
             )}
           </div>
         </div>
         <div style={styles.modeRow}>
           <div style={styles.modeSwitch}>
-            <button className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`} onClick={() => setMode(MODE_KEIRIN)}>
-              競輪
-            </button>
-            <button className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`} onClick={() => setMode(MODE_AUTORACE)}>
-              オート
-            </button>
+            <button className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`} onClick={() => setMode(MODE_KEIRIN)}>競輪</button>
+            <button className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`} onClick={() => setMode(MODE_AUTORACE)}>オート</button>
           </div>
           <div className="tinyMeta">
-            <span className={`pill ${isPro ? "pillOn" : "pillOff"}`}>
-              {isPro
-                ? `PRO${proState?.expiresAtMs ? `（有効期限：${formatYMD_JP(proState.expiresAtMs)}）` : ""}`
-                : "FREE"}
-            </span>
-            <span className="tinyCount">
-              通知 {selectedCount}/{maxNotifications}
-            </span>
+            <span className={`pill ${isPro ? "pillOn" : "pillOff"}`}>{isPro ? "PRO" : "FREE"}</span>
+            <span className="tinyCount">通知 {selectedCount}/{maxNotifications}</span>
           </div>
         </div>
       </header>
@@ -946,31 +705,21 @@ export default function App() {
         <style>{cssText}</style>
         <Header rightHomeIcon="home" />
         <NotificationsPage
-          venues={venues}
-          toggled={toggled}
-          settings={settings}
-          onBack={() => setHash("home")}
-          onRemoveRaceKey={removeNotification}
+          venues={venues} toggled={toggled} settings={settings}
+          onBack={() => setHash("home")} onRemoveRaceKey={removeNotification}
         />
         {settingsOpen && (
           <SettingsModal
-            onClose={() => setSettingsOpen(false)}
-            settings={settings}
-            setSettings={setSettings}
-            fcmToken={fcmToken}
-            onRequestPushPermission={requestPushPermissionAndRegister}
-            onSendTestPush={sendTestPushAfter5s}
-            testPushState={testPushState}
-            proState={proState}
-            isPro={isPro}
+            onClose={() => setSettingsOpen(false)} settings={settings} setSettings={setSettings}
+            fcmToken={fcmToken} onRequestPushPermission={requestPushPermissionAndRegister}
+            onSendTestPush={sendTestPushAfter5s} testPushState={testPushState}
+            proState={proState} isPro={isPro}
             onVerifyProCode={(code) => {
               if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
               verifyProCodeNow(code);
             }}
-            maxNotifications={maxNotifications}
-            selectedCount={selectedCount}
-            timer2GateOpen={timer2GateOpen}
-            setToggled={setToggled}
+            maxNotifications={maxNotifications} selectedCount={selectedCount}
+            timer2GateOpen={timer2GateOpen} setToggled={setToggled}
           />
         )}
       </div>
@@ -993,33 +742,68 @@ export default function App() {
       )}
 
       <main style={styles.main}>
-        {/* ガールズ一括ボタン（競輪モードのみ） */}
-        {mode === MODE_KEIRIN && (
-          <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-            <div style={{ fontWeight: 900, fontSize: 14 }}>ガールズ開催のみ</div>
-            <div className="venueActions">
-              <button className="smallBtn on" onClick={() => toggleGirlsRaces(true)}>
-                ON
-              </button>
-              <button className="smallBtn off" onClick={() => toggleGirlsRaces(false)}>
-                OFF
-              </button>
+        {/* ガールズ一括アコーディオン（競輪モードのみ・ガールズ開催がある場合） */}
+        {mode === MODE_KEIRIN && girlsRacesList.length > 0 && (
+          <section className="card">
+            <div className="venueHead" onClick={() => setGirlsAccordionOpen(!girlsAccordionOpen)}>
+              <div className="venueTitle">
+                <span className="chev">{girlsAccordionOpen ? "▼" : "▶"}</span>
+                <span className="venueName">ガールズ開催のみ ({girlsRacesList.length}R)</span>
+              </div>
+              <div className="venueActions" onClick={(e) => e.stopPropagation()}>
+                <button className="smallBtn on" onClick={() => toggleGirlsAll(true)} title="まとめてON">ON</button>
+                <button className="smallBtn off" onClick={() => toggleGirlsAll(false)} title="まとめてOFF">OFF</button>
+              </div>
             </div>
-          </div>
+
+            {/* 開いた時だけリスト表示 */}
+            {girlsAccordionOpen && (
+              <div className="raceList">
+                {girlsRacesList.map((r) => {
+                  const closedAt = parseHHMMToday(r.closedAtHHMM);
+                  const ended = closedAt ? now.getTime() >= closedAt.getTime() : false;
+                  const checked = !!toggled[r.raceKey];
+                  const link = getLinkUrl(settings.linkTarget, r.url, r.mode);
+
+                  return (
+                    <div key={`g_${r.raceKey}`} className={`raceRow ${ended ? "ended" : ""}`}>
+                      <div className="raceLeft">
+                        <div className="raceTopLine">
+                          <span style={{ fontSize: 11, fontWeight: 900, background: "#eee", padding: "2px 6px", borderRadius: 4, marginRight: 6 }}>
+                            {r.venueName}
+                          </span>
+                          <div className="raceNo">{r.raceNo}R</div>
+                          <div className="raceDeadline">締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b></div>
+                          <a className="raceLink" href={link || "#"} target="_blank" rel="noopener noreferrer" onClick={(e) => { if (!link) e.preventDefault(); }}>
+                            レース情報
+                          </a>
+                        </div>
+                        {/* 選手名 */}
+                        {r.players && r.players.length > 0 && (
+                          <div className="racePlayers">{r.players.join("　")}</div>
+                        )}
+                      </div>
+                      <div className="raceRight">
+                        <div className="toggleWrap">
+                          <label className="toggle">
+                            <input type="checkbox" checked={checked} onChange={() => toggleRace(r.raceKey)} disabled={ended} />
+                            <span className="slider" />
+                          </label>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         )}
 
         {loading && <div className="card">読み込み中…</div>}
-        {!loading && err && (
-          <div className="card error">
-            <div style={{ fontWeight: 700 }}>読み込み失敗</div>
-            <div style={{ opacity: 0.9, marginTop: 6 }}>{err}</div>
-          </div>
-        )}
+        {!loading && err && <div className="card error"><div style={{ fontWeight: 700 }}>読み込み失敗</div><div>{err}</div></div>}
         {!loading && !err && venues.length === 0 && <div className="card">今日のデータがありません。</div>}
 
-        {!loading &&
-          !err &&
-          venues.map((v) => {
+        {!loading && !err && venues.map((v) => {
             const isOpen = !!openVenues[v.venueKey];
             return (
               <section className="card" key={v.venueKey}>
@@ -1030,12 +814,8 @@ export default function App() {
                     {v.grade ? <span className="grade">{v.grade}</span> : null}
                   </div>
                   <div className="venueActions" onClick={(e) => e.stopPropagation()}>
-                    <button className="smallBtn on" onClick={() => setVenueAll(v, true)} title="この会場をまとめてON">
-                      ON
-                    </button>
-                    <button className="smallBtn off" onClick={() => setVenueAll(v, false)} title="この会場をまとめてOFF">
-                      OFF
-                    </button>
+                    <button className="smallBtn on" onClick={() => setVenueAll(v, true)}>ON</button>
+                    <button className="smallBtn off" onClick={() => setVenueAll(v, false)}>OFF</button>
                   </div>
                 </div>
 
@@ -1055,37 +835,20 @@ export default function App() {
                             <div className="raceTopLine">
                               <div className="raceNo">{r.raceNo}R</div>
                               <div className="raceTitle">{r.title}</div>
-                              <div className="raceDeadline">
-                                締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b>
-                              </div>
-                              <a
-                                className="raceLink"
-                                href={link || "#"}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => {
-                                  if (!link) e.preventDefault();
-                                }}
-                              >
+                              <div className="raceDeadline">締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b></div>
+                              <a className="raceLink" href={link || "#"} target="_blank" rel="noopener noreferrer" onClick={(e) => { if (!link) e.preventDefault(); }}>
                                 レース情報
                               </a>
                             </div>
-                            {/* ★追加: 選手名表示 */}
+                            {/* ★選手名表示 */}
                             {r.players && r.players.length > 0 && (
-                              <div className="racePlayers">
-                                {r.players.join("　")}
-                              </div>
+                              <div className="racePlayers">{r.players.join("　")}</div>
                             )}
                           </div>
                           <div className="raceRight">
                             <div className="toggleWrap">
-                              <label className="toggle" title={checked ? "通知ON" : "通知OFF"}>
-                                <input
-                                  type="checkbox"
-                                  checked={checked}
-                                  onChange={() => toggleRace(r.raceKey)}
-                                  disabled={ended}
-                                />
+                              <label className="toggle">
+                                <input type="checkbox" checked={checked} onChange={() => toggleRace(r.raceKey)} disabled={ended} />
                                 <span className="slider" />
                               </label>
                             </div>
@@ -1102,23 +865,16 @@ export default function App() {
 
       {settingsOpen && (
         <SettingsModal
-          onClose={() => setSettingsOpen(false)}
-          settings={settings}
-          setSettings={setSettings}
-          fcmToken={fcmToken}
-          onRequestPushPermission={requestPushPermissionAndRegister}
-          onSendTestPush={sendTestPushAfter5s}
-          testPushState={testPushState}
-          proState={proState}
-          isPro={isPro}
+          onClose={() => setSettingsOpen(false)} settings={settings} setSettings={setSettings}
+          fcmToken={fcmToken} onRequestPushPermission={requestPushPermissionAndRegister}
+          onSendTestPush={sendTestPushAfter5s} testPushState={testPushState}
+          proState={proState} isPro={isPro}
           onVerifyProCode={(code) => {
             if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
             verifyProCodeNow(code);
           }}
-          maxNotifications={maxNotifications}
-          selectedCount={selectedCount}
-          timer2GateOpen={timer2GateOpen}
-          setToggled={setToggled}
+          maxNotifications={maxNotifications} selectedCount={selectedCount}
+          timer2GateOpen={timer2GateOpen} setToggled={setToggled}
         />
       )}
     </div>
@@ -1127,52 +883,25 @@ export default function App() {
 
 /* ===== 設定モーダル ===== */
 function SettingsModal({
-  onClose,
-  settings,
-  setSettings,
-  fcmToken,
-  onRequestPushPermission,
-  onSendTestPush,
-  testPushState,
-  proState,
-  isPro,
-  onVerifyProCode,
-  maxNotifications,
-  selectedCount,
-  timer2GateOpen,
-  setToggled,
+  onClose, settings, setSettings, fcmToken, onRequestPushPermission,
+  onSendTestPush, testPushState, proState, isPro, onVerifyProCode,
+  maxNotifications, selectedCount, timer2GateOpen, setToggled,
 }) {
-  const canRequest = (() => {
-    try {
-      return "Notification" in window && "serviceWorker" in navigator;
-    } catch {
-      return false;
-    }
-  })();
-  const permission = (() => {
-    try {
-      return "Notification" in window ? Notification.permission : "unsupported";
-    } catch {
-      return "unsupported";
-    }
-  })();
+  const canRequest = (() => { try { return "Notification" in window && "serviceWorker" in navigator; } catch { return false; } })();
+  const permission = (() => { try { return "Notification" in window ? Notification.permission : "unsupported"; } catch { return "unsupported"; } })();
   const canTest = !!fcmToken && permission === "granted" && !!onSendTestPush;
   const proStatusLabel = String(proState?.message || "");
   const timer2EnabledUI = !!settings.timer2Enabled;
   const timer2ToggleDisabled = !timer2GateOpen;
-  function resetAllSelections() {
-    setToggled?.({});
-    setSettings((s) => ({ ...s, __resetAll: Date.now() }));
-  }
+  function resetAllSelections() { setToggled?.({}); setSettings((s) => ({ ...s, __resetAll: Date.now() })); }
+
   return (
     <div className="modalBack" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modalHead settingsHeader">
           <div className="modalTitle">設定</div>
           <div className="settingsHeaderRight">
-            <button type="button" className="iconBtn closeBtn" onClick={onClose} aria-label="close">
-              ✕
-            </button>
+            <button type="button" className="iconBtn closeBtn" onClick={onClose} aria-label="close">✕</button>
           </div>
         </div>
         <div className="modalBody">
@@ -1180,150 +909,85 @@ function SettingsModal({
             <div className="label">Push通知</div>
             <div style={{ display: "grid", gap: 10 }}>
               {!canRequest ? (
-                <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5 }}>
-                  この端末では利用できません
-                </div>
+                <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5 }}>利用不可</div>
               ) : permission === "granted" ? (
                 <div className="pushGrantRow">
-                  <div className="pushGrantLeft">
-                    <div style={{ fontWeight: 900 }}>許可済み</div>
-                  </div>
+                  <div className="pushGrantLeft"><div style={{ fontWeight: 900 }}>許可済み</div></div>
                   <div className="pushGrantRight">
                     <div style={{ fontWeight: 900, letterSpacing: 0.2 }}>ON</div>
-                    <button
-                      type="button"
-                      className="btn small pushTestBtn"
-                      onClick={() => onSendTestPush?.(fcmToken)}
-                      disabled={!canTest || !!testPushState?.loading}
-                    >
+                    <button type="button" className="btn small pushTestBtn" onClick={() => onSendTestPush?.(fcmToken)} disabled={!canTest || !!testPushState?.loading}>
                       {testPushState?.loading ? "送信中…" : "テスト（5秒後）"}
                     </button>
                   </div>
                 </div>
               ) : (
-                <button type="button" className="btn" onClick={onRequestPushPermission}>
-                  通知を許可する
-                </button>
+                <button type="button" className="btn" onClick={onRequestPushPermission}>通知を許可する</button>
               )}
             </div>
           </div>
           <div className="row">
             <div className="label">1つ目タイマー</div>
-            <select
-              value={String(settings.timer1MinutesBefore)}
-              onChange={(e) => setSettings((s) => ({ ...s, timer1MinutesBefore: e.target.value }))}
-            >
-              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (
-                <option key={m} value={String(m)}>
-                  {m} 分前
-                </option>
-              ))}
+            <select value={String(settings.timer1MinutesBefore)} onChange={(e) => setSettings((s) => ({ ...s, timer1MinutesBefore: e.target.value }))}>
+              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (<option key={m} value={String(m)}>{m} 分前</option>))}
             </select>
           </div>
           <div className="row">
             <div className="label">2つ目タイマー</div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
               <label className="toggle">
-                <input
-                  type="checkbox"
-                  checked={!!settings.timer2Enabled}
-                  onChange={(e) => setSettings((s) => ({ ...s, timer2Enabled: e.target.checked }))}
-                  disabled={timer2ToggleDisabled}
-                />
+                <input type="checkbox" checked={!!settings.timer2Enabled} onChange={(e) => setSettings((s) => ({ ...s, timer2Enabled: e.target.checked }))} disabled={timer2ToggleDisabled} />
                 <span className="slider" />
               </label>
-              <div style={{ opacity: timer2GateOpen ? 1 : 0.7, fontWeight: 800 }}>
-                {timer2EnabledUI ? "ON" : "OFF"}
-              </div>
+              <div style={{ opacity: timer2GateOpen ? 1 : 0.7, fontWeight: 800 }}>{timer2EnabledUI ? "ON" : "OFF"}</div>
             </div>
             {!timer2GateOpen ? <div className="hint">PRO版で解放</div> : null}
           </div>
           <div className="row">
             <div className="label">2回目（分前）</div>
-            <select
-              value={String(settings.timer2MinutesBefore)}
-              onChange={(e) => setSettings((s) => ({ ...s, timer2MinutesBefore: e.target.value }))}
-              disabled={!timer2GateOpen || !settings.timer2Enabled}
-            >
-              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (
-                <option key={m} value={String(m)}>
-                  {m} 分前
-                </option>
-              ))}
+            <select value={String(settings.timer2MinutesBefore)} onChange={(e) => setSettings((s) => ({ ...s, timer2MinutesBefore: e.target.value }))} disabled={!timer2GateOpen || !settings.timer2Enabled}>
+              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (<option key={m} value={String(m)}>{m} 分前</option>))}
             </select>
           </div>
           <div className="row">
             <div className="label">通知先(競輪)</div>
-            <select
-              value={settings.linkTarget}
-              onChange={(e) => setSettings((s) => ({ ...s, linkTarget: e.target.value }))}
-            >
-              {LINK_TARGETS_KEIRIN.map((t) => (
-                <option key={t.key} value={t.key}>
-                  {t.label}
-                </option>
-              ))}
+            <select value={settings.linkTarget} onChange={(e) => setSettings((s) => ({ ...s, linkTarget: e.target.value }))}>
+              {LINK_TARGETS_KEIRIN.map((t) => (<option key={t.key} value={t.key}>{t.label}</option>))}
             </select>
           </div>
           <div className="row">
             <div className="label">通知先(オート)</div>
-            <select
-              value={settings.linkTargetAuto}
-              onChange={(e) => setSettings((s) => ({ ...s, linkTargetAuto: e.target.value }))}
-            >
-              {LINK_TARGETS_AUTO.map((t) => (
-                <option key={t.key} value={t.key}>
-                  {t.label}
-                </option>
-              ))}
+            <select value={settings.linkTargetAuto} onChange={(e) => setSettings((s) => ({ ...s, linkTargetAuto: e.target.value }))}>
+              {LINK_TARGETS_AUTO.map((t) => (<option key={t.key} value={t.key}>{t.label}</option>))}
             </select>
           </div>
           <div className="row">
             <div className="label">コード入力</div>
             <div style={{ display: "grid", gap: 8 }}>
               <div className="codeRow">
-                <input
-                  className="codeInput"
-                  value={settings.proCode || ""}
-                  onChange={(e) => setSettings((s) => ({ ...s, proCode: e.target.value }))}
-                  placeholder="コードを入力"
-                />
-                <button
-                  type="button"
-                  className="btn small"
-                  onClick={() => onVerifyProCode?.(settings.proCode)}
-                  disabled={!!proState?.loading}
-                >
+                <input className="codeInput" value={settings.proCode || ""} onChange={(e) => setSettings((s) => ({ ...s, proCode: e.target.value }))} placeholder="コードを入力" />
+                <button type="button" className="btn small" onClick={() => onVerifyProCode?.(settings.proCode)} disabled={!!proState?.loading}>
                   {proState?.loading ? "送信中…" : "送信"}
                 </button>
               </div>
               <div className="codeMeta">
-                <div style={{ fontSize: 12, opacity: 0.85 }}>
-                  {isPro ? `有効期限：${formatYMD_JP(proState.expiresAtMs) || "—"}` : "無料版"}
-                </div>
+                <div style={{ fontSize: 12, opacity: 0.85 }}>{isPro ? `有効期限：${formatYMD_JP(proState.expiresAtMs) || "—"}` : "無料版"}</div>
                 <div style={{ fontSize: 12, opacity: 0.85 }}>{proStatusLabel || ""}</div>
               </div>
             </div>
           </div>
           <div className="row">
             <div className="label">通知上限</div>
-            <div style={{ fontWeight: 800 }}>
-              現在：{selectedCount} 件 / 上限：{maxNotifications} 件
-            </div>
+            <div style={{ fontWeight: 800 }}>現在：{selectedCount} 件 / 上限：{maxNotifications} 件</div>
           </div>
           <div className="row">
             <div className="label">選択のリセット</div>
             <div style={{ display: "grid", gap: 8 }}>
-              <button type="button" className="btn danger" onClick={resetAllSelections}>
-                すべて解除
-              </button>
+              <button type="button" className="btn danger" onClick={resetAllSelections}>すべて解除</button>
             </div>
           </div>
         </div>
         <div className="modalFoot">
-          <button type="button" className="btn" onClick={onClose}>
-            閉じる
-          </button>
+          <button type="button" className="btn" onClick={onClose}>閉じる</button>
         </div>
       </div>
     </div>
@@ -1332,23 +996,8 @@ function SettingsModal({
 
 /* ===== style ===== */
 const styles = {
-  page: {
-    minHeight: "100vh",
-    background: "#F6F7F3",
-    color: "#111",
-    fontFamily:
-      'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Sans", Arial, sans-serif',
-    fontWeight: 400,
-  },
-  header: {
-    position: "sticky",
-    top: 0,
-    zIndex: 5,
-    backdropFilter: "blur(10px)",
-    background: "rgba(246,247,243,0.90)",
-    borderBottom: "1px solid rgba(0,0,0,0.06)",
-    padding: "12px 12px 10px",
-  },
+  page: { minHeight: "100vh", background: "#F6F7F3", color: "#111", fontFamily: 'system-ui, -apple-system, sans-serif', fontWeight: 400 },
+  header: { position: "sticky", top: 0, zIndex: 5, backdropFilter: "blur(10px)", background: "rgba(246,247,243,0.90)", borderBottom: "1px solid rgba(0,0,0,0.06)", padding: "12px 12px 10px" },
   headerTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 },
   titleRow: { display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 },
   title: { fontSize: 18, fontWeight: 900, letterSpacing: 0.2, whiteSpace: "nowrap" },
@@ -1360,183 +1009,64 @@ const styles = {
 };
 
 const cssText = `
-:root{
-  --bg: #F6F7F3;
-  --card: #FFFFFF;
-  --ink: #111111;
-  --accent: #2E6F3E;
-  --accent2: #E6F1E7;
-  --border: rgba(0,0,0,0.08);
-  --shadow: 0 10px 22px rgba(0,0,0,0.06);
-}
-*{ box-sizing: border-box; }
-html, body{ background: var(--bg); }
-button, input, select{ font: inherit; }
-select, input{
-  border: 1px solid rgba(0,0,0,0.12);
-  border-radius: 14px;
-  padding: 10px 12px;
-  background: #fff;
-}
-select{ cursor:pointer; }
-input{ width: 100%; }
-.card{
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  box-shadow: var(--shadow);
-  padding: 12px;
-}
+:root{ --bg: #F6F7F3; --card: #FFFFFF; --ink: #111111; --accent: #2E6F3E; --accent2: #E6F1E7; --border: rgba(0,0,0,0.08); --shadow: 0 10px 22px rgba(0,0,0,0.06); }
+*{ box-sizing: border-box; } html, body{ background: var(--bg); }
+button, input, select{ font: inherit; } select, input{ border: 1px solid rgba(0,0,0,0.12); border-radius: 14px; padding: 10px 12px; background: #fff; } select{ cursor:pointer; } input{ width: 100%; }
+.card{ background: var(--card); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); padding: 12px; }
 .card.error{ border-color: rgba(220,0,0,0.20); background: rgba(255,240,240,0.92); }
-.chip{
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.95);
-  padding: 10px 14px;
-  border-radius: 999px;
-  cursor: pointer;
-  font-weight: 900;
-  white-space: nowrap;
-}
+.chip{ border: 1px solid rgba(0,0,0,0.10); background: rgba(255,255,255,0.95); padding: 10px 14px; border-radius: 999px; cursor: pointer; font-weight: 900; white-space: nowrap; }
 .chipOn{ border-color: rgba(46,111,62,0.28); background: var(--accent2); }
-.iconBtn{
-  border: 1px solid rgba(0,0,0,0.10);
-  background: rgba(255,255,255,0.95);
-  width: 48px;
-  height: 48px;
-  border-radius: 16px;
-  cursor: pointer;
-  font-weight: 900;
-  font-size: 20px;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.btn{
-  border: 1px solid rgba(0,0,0,0.12);
-  background: #fff;
-  padding: 10px 14px;
-  border-radius: 14px;
-  cursor: pointer;
-  font-weight: 900;
-}
+.iconBtn{ border: 1px solid rgba(0,0,0,0.10); background: rgba(255,255,255,0.95); width: 48px; height: 48px; border-radius: 16px; cursor: pointer; font-weight: 900; font-size: 20px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
+.btn{ border: 1px solid rgba(0,0,0,0.12); background: #fff; padding: 10px 14px; border-radius: 14px; cursor: pointer; font-weight: 900; }
 .btn.small{ padding: 8px 10px; font-size: 12px; border-radius: 12px; }
 .btn.danger{ border-color: rgba(220,0,0,0.22); background: rgba(255,240,240,0.9); }
-.adBar{
-  border: 1px dashed rgba(0,0,0,0.14);
-  background: rgba(0,0,0,0.02);
-  border-radius: 16px;
-  padding: 10px 12px;
-}
-.adText{ font-weight: 900; }
-.adSub{ font-size: 12px; opacity: 0.75; margin-top: 2px; }
-.tinyMeta{ display:flex; alignItems:center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.tinyCount{ font-size: 12px; opacity: 0.7; white-space: nowrap; }
-.pill{
-  display:inline-flex; alignItems:center; justify-content:center;
-  padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.12);
-  font-weight: 900; font-size: 12px; white-space: nowrap;
-}
-.pillOn{ background: var(--accent2); border-color: rgba(46,111,62,0.25); }
-.pillOff{ background: rgba(0,0,0,0.02); opacity: 0.9; }
+.adBar{ border: 1px dashed rgba(0,0,0,0.14); background: rgba(0,0,0,0.02); border-radius: 16px; padding: 10px 12px; }
+.adText{ font-weight: 900; } .adSub{ font-size: 12px; opacity: 0.75; margin-top: 2px; }
+.tinyMeta{ display:flex; alignItems:center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; } .tinyCount{ font-size: 12px; opacity: 0.7; white-space: nowrap; }
+.pill{ display:inline-flex; alignItems:center; justify-content:center; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.12); font-weight: 900; font-size: 12px; white-space: nowrap; }
+.pillOn{ background: var(--accent2); border-color: rgba(46,111,62,0.25); } .pillOff{ background: rgba(0,0,0,0.02); opacity: 0.9; }
 .venueHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; cursor: pointer; }
 .venueTitle{ display:flex; align-items:center; gap: 10px; min-width: 0; }
 .venueName{ font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
-.chev{ opacity: 0.7; }
-.grade{
-  font-size: 12px; border: 1px solid rgba(0,0,0,0.12);
-  border-radius: 999px; padding: 4px 8px; opacity: 0.8; white-space: nowrap;
-}
+.chev{ opacity: 0.7; } .grade{ font-size: 12px; border: 1px solid rgba(0,0,0,0.12); border-radius: 999px; padding: 4px 8px; opacity: 0.8; white-space: nowrap; }
 .venueActions{ display:flex; gap: 8px; flex: 0 0 auto; }
-.smallBtn{
-  border: 1px solid rgba(0,0,0,0.12); background: #fff;
-  padding: 8px 10px; border-radius: 12px; cursor:pointer; font-weight: 900;
-}
-.smallBtn.on{ background: var(--accent2); border-color: rgba(46,111,62,0.25); }
-.smallBtn.off{ background: rgba(0,0,0,0.02); }
+.smallBtn{ border: 1px solid rgba(0,0,0,0.12); background: #fff; padding: 8px 10px; border-radius: 12px; cursor:pointer; font-weight: 900; }
+.smallBtn.on{ background: var(--accent2); border-color: rgba(46,111,62,0.25); } .smallBtn.off{ background: rgba(0,0,0,0.02); }
 .raceList{ margin-top: 10px; display:grid; gap: 10px; }
-.raceRow{
-  display:flex; gap: 10px; align-items: stretch;
-  border: 1px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.75);
-  border-radius: 16px; padding: 10px;
-}
+.raceRow{ display:flex; gap: 10px; align-items: stretch; border: 1px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.75); border-radius: 16px; padding: 10px; }
 .raceRow.ended{ opacity: 0.50; filter: grayscale(20%); }
-.raceLeft{ flex: 1 1 auto; min-width: 0; }
-.raceRight{ flex: 0 0 auto; display:flex; align-items:center; }
+.raceLeft{ flex: 1 1 auto; min-width: 0; } .raceRight{ flex: 0 0 auto; display:flex; align-items:center; }
 .raceTopLine{ display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
-.raceNo{ font-weight: 900; white-space: nowrap; }
-.raceTitle{ font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.raceNo{ font-weight: 900; white-space: nowrap; } .raceTitle{ font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .raceDeadline{ font-size: 12px; opacity: 0.85; white-space: nowrap; }
-.raceLink{ font-size: 12px; font-weight: 900; color: var(--ink); text-decoration: underline; white-space: nowrap; cursor: pointer; }
-.raceLink:hover{ opacity: 0.7; }
-.racePlayers{
-  font-size: 12px; margin-top: 6px; color: #555;
-  line-height: 1.4; opacity: 0.9;
-  word-break: break-all;
-}
-.toggleWrap{ padding-left: 6px; }
-.toggle{ position: relative; display:inline-block; width: 54px; height: 32px; }
+.raceLink{ font-size: 12px; font-weight: 900; color: var(--ink); text-decoration: underline; white-space: nowrap; cursor: pointer; } .raceLink:hover{ opacity: 0.7; }
+.racePlayers{ font-size: 12px; margin-top: 6px; color: #555; line-height: 1.4; opacity: 0.9; word-break: break-all; }
+.toggleWrap{ padding-left: 6px; } .toggle{ position: relative; display:inline-block; width: 54px; height: 32px; }
 .toggle input{ position:absolute; inset:0; opacity:0; width:100%; height:100%; cursor:pointer; }
-.slider{
-  position:absolute; cursor:pointer; inset:0;
-  background: rgba(0,0,0,0.18); border: 1px solid rgba(0,0,0,0.10);
-  transition: .15s; border-radius: 999px;
-}
-.slider:before{
-  content:""; position:absolute; height: 24px; width: 24px;
-  left: 3px; top: 3px; background: #fff;
-  transition: .15s; border-radius: 999px; box-shadow: 0 4px 12px rgba(0,0,0,0.16);
-}
+.slider{ position:absolute; cursor:pointer; inset:0; background: rgba(0,0,0,0.18); border: 1px solid rgba(0,0,0,0.10); transition: .15s; border-radius: 999px; }
+.slider:before{ content:""; position:absolute; height: 24px; width: 24px; left: 3px; top: 3px; background: #fff; transition: .15s; border-radius: 999px; box-shadow: 0 4px 12px rgba(0,0,0,0.16); }
 .toggle input:checked + .slider{ background: var(--accent); border-color: rgba(46,111,62,0.30); }
 .toggle input:checked + .slider:before{ transform: translateX(22px); }
 .pageHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-.pageTitle{ font-size: 16px; font-weight: 900; }
-.notifyList{ display:grid; gap: 10px; }
-.notifyRowSimple{
-  display:flex; align-items: center; justify-content: space-between; gap: 10px;
-  border: 1px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.75);
-  border-radius: 16px; padding: 10px;
-}
-.notifyLeftSimple{ flex: 1 1 auto; min-width: 0; }
-.notifyRightSimple{ flex: 0 0 auto; display:flex; align-items:center; gap: 8px; }
+.pageTitle{ font-size: 16px; font-weight: 900; } .notifyList{ display:grid; gap: 10px; }
+.notifyRowSimple{ display:flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.75); border-radius: 16px; padding: 10px; }
+.notifyLeftSimple{ flex: 1 1 auto; min-width: 0; } .notifyRightSimple{ flex: 0 0 auto; display:flex; align-items:center; gap: 8px; }
 .notifyLine{ display:flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
-.notifyName{ font-weight: 900; white-space: nowrap; }
-.notifyTitle{ font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notifyName{ font-weight: 900; white-space: nowrap; } .notifyTitle{ font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notifyDeadline{ font-size: 12px; opacity: 0.85; white-space: nowrap; }
-.notifyLink{ font-size: 12px; font-weight: 900; color: var(--ink); text-decoration: underline; white-space: nowrap; }
-.notifyLink:hover{ opacity: 0.7; }
-.modalBack{
-  position: fixed; inset: 0; background: rgba(0,0,0,0.35);
-  display:flex; align-items: flex-start; justify-content: center;
-  padding: 24px 16px 16px; z-index: 50;
-}
-.modal{
-  width: min(720px, 100%); background: #fff; border-radius: 20px;
-  border: 1px solid rgba(0,0,0,0.10); box-shadow: 0 18px 40px rgba(0,0,0,0.22);
-  overflow: hidden; max-height: calc(100vh - 40px); display: flex; flex-direction: column;
-}
+.notifyLink{ font-size: 12px; font-weight: 900; color: var(--ink); text-decoration: underline; white-space: nowrap; } .notifyLink:hover{ opacity: 0.7; }
+.modalBack{ position: fixed; inset: 0; background: rgba(0,0,0,0.35); display:flex; align-items: flex-start; justify-content: center; padding: 24px 16px 16px; z-index: 50; }
+.modal{ width: min(720px, 100%); background: #fff; border-radius: 20px; border: 1px solid rgba(0,0,0,0.10); box-shadow: 0 18px 40px rgba(0,0,0,0.22); overflow: hidden; max-height: calc(100vh - 40px); display: flex; flex-direction: column; }
 .modalHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; padding: 12px 12px; border-bottom: 1px solid rgba(0,0,0,0.06); }
-.modalTitle{ font-weight: 900; }
-.modalBody{ padding: 12px; display:grid; gap: 10px; overflow: auto; min-height: 0; }
+.modalTitle{ font-weight: 900; } .modalBody{ padding: 12px; display:grid; gap: 10px; overflow: auto; min-height: 0; }
 .modalFoot{ padding: 12px; border-top: 1px solid rgba(0,0,0,0.06); display:flex; justify-content: flex-end; }
 .row{ display:grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: center; }
-.label{ font-size: 13px; font-weight: 900; opacity: 0.80; }
-.hint{ margin-top: 6px; font-size: 12px; opacity: 0.72; }
-@media (max-width: 560px){
-  .row{ grid-template-columns: 1fr; }
-  .venueName{ max-width: 58vw; }
-}
+.label{ font-size: 13px; font-weight: 900; opacity: 0.80; } .hint{ margin-top: 6px; font-size: 12px; opacity: 0.72; }
+@media (max-width: 560px){ .row{ grid-template-columns: 1fr; } .venueName{ max-width: 58vw; } }
 .pushGrantRow{ display:flex; align-items:center; justify-content: space-between; gap: 12px; }
-.pushGrantLeft{ flex: 0 0 auto; }
-.pushGrantRight{ display:flex; align-items:center; gap: 10px; flex: 0 0 auto; position: relative; z-index: 10000; }
+.pushGrantLeft{ flex: 0 0 auto; } .pushGrantRight{ display:flex; align-items:center; gap: 10px; flex: 0 0 auto; position: relative; z-index: 10000; }
 .pushTestBtn{ pointer-events: auto !important; position: relative; z-index: 10001; }
-.settingsHeader, .settingsHeaderRight{ position: relative; z-index: 9999; }
-.settingsHeaderRight button{ position: relative; z-index: 10000; pointer-events: auto; }
-.codeRow{ display:flex; gap: 10px; align-items:center; }
-.codeInput{ flex: 1 1 auto; min-width: 0; }
-.codeMeta{ margin-top: 8px; display:grid; gap: 4px; }
-.closeBtn{ margin-top: 4px; }
-.modalBack{ pointer-events:auto; }
-.modal{ pointer-events:auto; }
-.modal *{ pointer-events:auto; }
+.settingsHeader, .settingsHeaderRight{ position: relative; z-index: 9999; } .settingsHeaderRight button{ position: relative; z-index: 10000; pointer-events: auto; }
+.codeRow{ display:flex; gap: 10px; align-items:center; } .codeInput{ flex: 1 1 auto; min-width: 0; } .codeMeta{ margin-top: 8px; display:grid; gap: 4px; }
+.closeBtn{ margin-top: 4px; } .modalBack{ pointer-events:auto; } .modal{ pointer-events:auto; } .modal *{ pointer-events:auto; }
 `;
