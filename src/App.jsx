@@ -4,7 +4,10 @@ import { messaging, VAPID_KEY } from "./firebase";
 
 /**
  * もふタイマー Web
- * 改修：ガールズアコーディオン(個別選択) + テキスト出力URL削除 + 選手名表示
+ * 改修：
+ * - オート通知が来ない対策（closed_at正規化 + notify_urlフォールバック）
+ * - 通知一覧(#notifications)に居るとき「競輪/オート」押下でhomeへ戻す
+ * - ガールズアコーディオン(個別選択) + テキスト出力URL削除 + 選手名表示（既存）
  */
 
 const APP_TITLE = "もふタイマー";
@@ -76,25 +79,39 @@ const LINK_TARGETS_AUTO = [
 function getLinkUrl(linkTargetKey, raceUrlFromJson, mode) {
   if (mode === MODE_AUTORACE) {
     switch (linkTargetKey) {
-      case "autoracejp": return "https://autorace.jp/";
-      case "oddspark": return "https://www.oddspark.com/autorace/";
-      case "chariloto": return "https://www.chariloto.com/autorace";
-      case "winticket": return "https://www.winticket.jp/autorace/";
-      case "json": default: return raceUrlFromJson || "";
+      case "autoracejp":
+        return "https://autorace.jp/";
+      case "oddspark":
+        return "https://www.oddspark.com/autorace/";
+      case "chariloto":
+        return "https://www.chariloto.com/autorace";
+      case "winticket":
+        return "https://www.winticket.jp/autorace/";
+      case "json":
+      default:
+        return raceUrlFromJson || "";
     }
   }
   switch (linkTargetKey) {
-    case "json": return raceUrlFromJson || "";
-    case "oddspark": return "https://www.oddspark.com/";
-    case "chariloto": return "https://www.chariloto.com/keirin";
-    case "winticket": return "https://www.winticket.jp/keirin/";
-    case "dmm": return "https://keirin.dmm.com/";
-    default: return raceUrlFromJson || "";
+    case "json":
+      return raceUrlFromJson || "";
+    case "oddspark":
+      return "https://www.oddspark.com/";
+    case "chariloto":
+      return "https://www.chariloto.com/keirin";
+    case "winticket":
+      return "https://www.winticket.jp/keirin/";
+    case "dmm":
+      return "https://keirin.dmm.com/";
+    default:
+      return raceUrlFromJson || "";
   }
 }
 
 /* ===== Util ===== */
-function pad2(n) { return String(n).padStart(2, "0"); }
+function pad2(n) {
+  return String(n).padStart(2, "0");
+}
 function todayKeyYYYYMMDD() {
   const d = new Date();
   return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
@@ -110,6 +127,29 @@ function formatYMD_JP(ms) {
 function toHHMM(dateObj) {
   return `${pad2(dateObj.getHours())}:${pad2(dateObj.getMinutes())}`;
 }
+
+/**
+ * ★追加：時刻の正規化
+ * - "13:05:00" -> "13:05"
+ * - "1305"     -> "13:05"
+ * - "9:05"     -> "09:05"
+ */
+function normalizeHHMM(v) {
+  const s = String(v || "").trim();
+  if (!s) return "";
+
+  // 13:05:00 / 13:05 -> 13:05
+  let m = s.match(/^(\d{1,2}):(\d{2})/);
+  if (m) return `${pad2(m[1])}:${m[2]}`;
+
+  // 1305 -> 13:05 / 905 -> 09:05（※ "905" は 9:05 と解釈）
+  m = s.match(/^(\d{1,2})(\d{2})$/);
+  if (m) return `${pad2(m[1])}:${m[2]}`;
+
+  // その他はそのまま
+  return s;
+}
+
 function parseHHMMToday(hhmm) {
   if (!hhmm || typeof hhmm !== "string") return null;
   const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
@@ -187,7 +227,11 @@ function normalizeRace(r, mode, v, ri) {
   const venueName = (v && v.venueName) || r.venue || r.venueName || "会場";
   const venueKey = (v && v.venueKey) || `${mode}_${venueName}`;
   const raceNo = Number(r.race_number ?? r.raceNo ?? r.race_no ?? r.race ?? r.no ?? (ri + 1)) || (ri + 1);
-  const closedAtHHMM = r.closed_at || r.closedAt || r.close_at || r.closeAt || r.deadline || r.shimekiri || "";
+
+  // ★修正：時刻の正規化（秒付き/数値でも吸収）
+  const rawClosed = r.closed_at || r.closedAt || r.close_at || r.closeAt || r.deadline || r.shimekiri || "";
+  const closedAtHHMM = normalizeHHMM(rawClosed);
+
   const url = r.url || r.raceUrl || "";
   const title = r.class_category || r.title || r.name || `${raceNo}R`;
   const date = todayKeyYYYYMMDD();
@@ -263,12 +307,10 @@ function NotificationsPage({ venues, toggled, settings, onBack, onRemoveRaceKey 
     return list;
   }, [selectedRaceKeys, raceMap]);
 
-  // ★修正：URLを削除し、シンプルなリストに
+  // ★URLなし：シンプルなリストのみ
   const textData = useMemo(() => {
     return rows
-      .map((r) => {
-        return `${r.venueName} ${r.raceNo}R ${r.closedAtHHMM}締切`;
-      })
+      .map((r) => `${r.venueName} ${r.raceNo}R ${r.closedAtHHMM}締切`)
       .join("\n");
   }, [rows]);
 
@@ -281,22 +323,31 @@ function NotificationsPage({ venues, toggled, settings, onBack, onRemoveRaceKey 
             <button className={`smallBtn ${showText ? "on" : ""}`} onClick={() => setShowText(!showText)}>
               テキスト表示
             </button>
-            <button className="btn" onClick={onBack}>戻る</button>
+            <button className="btn" onClick={onBack}>
+              戻る
+            </button>
           </div>
         </div>
+
         {showText && (
           <div style={{ marginBottom: 16 }}>
             <textarea
               readOnly
               style={{
-                width: "100%", height: 200, fontSize: 13, padding: 8,
-                borderRadius: 8, border: "1px solid #ccc", background: "#f9f9f9",
+                width: "100%",
+                height: 200,
+                fontSize: 13,
+                padding: 8,
+                borderRadius: 8,
+                border: "1px solid #ccc",
+                background: "#f9f9f9",
               }}
               value={textData}
             />
             <div style={{ fontSize: 12, opacity: 0.7, textAlign: "right" }}>コピーして使ってください</div>
           </div>
         )}
+
         {rows.length === 0 ? (
           <div style={{ opacity: 0.85 }}>通知がありません。</div>
         ) : (
@@ -308,19 +359,30 @@ function NotificationsPage({ venues, toggled, settings, onBack, onRemoveRaceKey 
                 <div key={x.raceKey} className="notifyRowSimple">
                   <div className="notifyLeftSimple">
                     <div className="notifyLine">
-                      <span className="notifyName">{x.venueName} {x.raceNo}R</span>
+                      <span className="notifyName">
+                        {x.venueName} {x.raceNo}R
+                      </span>
                       <span className="notifyTitle">{x.title}</span>
-                      <span className="notifyDeadline">締切 <b>{x.closedAt ? toHHMM(x.closedAt) : (x.closedAtHHMM || "--:--")}</b></span>
+                      <span className="notifyDeadline">
+                        締切 <b>{x.closedAt ? toHHMM(x.closedAt) : x.closedAtHHMM || "--:--"}</b>
+                      </span>
                       <a
-                        className="notifyLink" href={link || "#"} target="_blank" rel="noopener noreferrer"
-                        onClick={(e) => { if (!link) e.preventDefault(); }}
+                        className="notifyLink"
+                        href={link || "#"}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e) => {
+                          if (!link) e.preventDefault();
+                        }}
                       >
                         レース情報
                       </a>
                     </div>
                   </div>
                   <div className="notifyRightSimple">
-                    <button className="btn danger" onClick={() => onRemoveRaceKey(x.raceKey)}>削除</button>
+                    <button className="btn danger" onClick={() => onRemoveRaceKey(x.raceKey)}>
+                      削除
+                    </button>
                   </div>
                 </div>
               );
@@ -328,6 +390,7 @@ function NotificationsPage({ venues, toggled, settings, onBack, onRemoveRaceKey 
           </div>
         )}
       </section>
+
       <section className="card">
         <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.6 }}>
           ・「削除」は端末内の通知リストから外します。<br />
@@ -339,8 +402,13 @@ function NotificationsPage({ venues, toggled, settings, onBack, onRemoveRaceKey 
 }
 
 export default function App() {
-  useEffect(() => { document.title = APP_TITLE; }, []);
-  useEffect(() => { ensureAnonUserId(); }, []);
+  useEffect(() => {
+    document.title = APP_TITLE;
+  }, []);
+  useEffect(() => {
+    ensureAnonUserId();
+  }, []);
+
   const [route, setRoute] = useState(getRouteFromHash());
   useEffect(() => {
     const onHash = () => setRoute(getRouteFromHash());
@@ -352,8 +420,10 @@ export default function App() {
   const [venues, setVenues] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const [openVenues, setOpenVenues] = useState(() => safeJsonParse(localStorage.getItem(STORAGE_OPEN_VENUES) || "{}", {}));
-  
+  const [openVenues, setOpenVenues] = useState(() =>
+    safeJsonParse(localStorage.getItem(STORAGE_OPEN_VENUES) || "{}", {})
+  );
+
   // ★ガールズ用アコーディオン開閉
   const [girlsAccordionOpen, setGirlsAccordionOpen] = useState(false);
 
@@ -367,8 +437,15 @@ export default function App() {
   const [fcmToken, setFcmToken] = useState(() => localStorage.getItem(STORAGE_FCM_TOKEN) || "");
 
   const [proState, setProState] = useState({
-    loading: false, verified: false, pro: false, maxNotifications: 10,
-    timer2Allowed: false, adsOff: false, expiresAtMs: null, period: "", message: "",
+    loading: false,
+    verified: false,
+    pro: false,
+    maxNotifications: 10,
+    timer2Allowed: false,
+    adsOff: false,
+    expiresAtMs: null,
+    period: "",
+    message: "",
   });
 
   useEffect(() => {
@@ -378,18 +455,38 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
-    setLoading(true); setErr("");
+    setLoading(true);
+    setErr("");
     fetchRacesJson(mode)
-      .then((j) => { if (alive) setVenues(normalizeToVenues(j, mode)); })
-      .catch((e) => { if (alive) { setErr(String(e?.message || e)); setVenues([]); } })
-      .finally(() => { if (alive) setLoading(false); });
-    return () => { alive = false; };
+      .then((j) => {
+        if (alive) setVenues(normalizeToVenues(j, mode));
+      })
+      .catch((e) => {
+        if (alive) {
+          setErr(String(e?.message || e));
+          setVenues([]);
+        }
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
   }, [mode]);
 
-  useEffect(() => { localStorage.setItem(STORAGE_OPEN_VENUES, JSON.stringify(openVenues)); }, [openVenues]);
-  useEffect(() => { localStorage.setItem(STORAGE_TOGGLED, JSON.stringify(toggled)); }, [toggled]);
-  useEffect(() => { localStorage.setItem(STORAGE_SETTINGS, JSON.stringify(settings)); }, [settings]);
-  useEffect(() => { if (fcmToken) localStorage.setItem(STORAGE_FCM_TOKEN, fcmToken); }, [fcmToken]);
+  useEffect(() => {
+    localStorage.setItem(STORAGE_OPEN_VENUES, JSON.stringify(openVenues));
+  }, [openVenues]);
+  useEffect(() => {
+    localStorage.setItem(STORAGE_TOGGLED, JSON.stringify(toggled));
+  }, [toggled]);
+  useEffect(() => {
+    localStorage.setItem(STORAGE_SETTINGS, JSON.stringify(settings));
+  }, [settings]);
+  useEffect(() => {
+    if (fcmToken) localStorage.setItem(STORAGE_FCM_TOKEN, fcmToken);
+  }, [fcmToken]);
 
   useEffect(() => {
     try {
@@ -398,16 +495,26 @@ export default function App() {
         const title = payload?.notification?.title || payload?.data?.title || "もふタイマー";
         const body = payload?.notification?.body || payload?.data?.body || "";
         const icon = payload?.notification?.icon || payload?.data?.icon;
-        const url = payload?.fcmOptions?.link || payload?.data?.url || "https://mt.qui2.net/#notifications";
+
+        const url =
+          payload?.fcmOptions?.link || payload?.data?.url || "https://mt.qui2.net/#notifications";
+
         const tag = payload?.data?.race_key || undefined;
         const options = { body, icon, data: { ...(payload?.data || {}), url }, tag, renotify: true };
         const reg = await navigator.serviceWorker?.ready;
-        if (reg?.showNotification) { await reg.showNotification(title, options); return; }
+        if (reg?.showNotification) {
+          await reg.showNotification(title, options);
+          return;
+        }
         new Notification(title, options);
       }
-      const unsub = onMessage(messaging, (payload) => { showForegroundNotification(payload); });
+      const unsub = onMessage(messaging, (payload) => {
+        showForegroundNotification(payload);
+      });
       return () => unsub();
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }, []);
 
   const todayLabel = useMemo(() => toYYYYMMDD(new Date()), []);
@@ -420,12 +527,10 @@ export default function App() {
     for (const v of venues) {
       for (const r of v.races) {
         if (r.classCategory && r.classCategory.includes("Ｌ級")) {
-          // 表示用にvenueNameも持たせる
           list.push({ ...r, venueName: v.venueName });
         }
       }
     }
-    // 時間順にソート
     list.sort((a, b) => {
       const ta = parseHHMMToday(a.closedAtHHMM)?.getTime() || 0;
       const tb = parseHHMMToday(b.closedAtHHMM)?.getTime() || 0;
@@ -449,18 +554,35 @@ export default function App() {
     const trimmed = String(code || "").trim();
     const verifyUrl = apiUrl("/pro/verify");
     if (!verifyUrl) {
-      setProState((p) => ({ ...p, loading: false, verified: true, pro: false, ...defaultsFromProFlag(false), period: "", message: "無料版（API未設定）" }));
+      setProState((p) => ({
+        ...p,
+        loading: false,
+        verified: true,
+        pro: false,
+        ...defaultsFromProFlag(false),
+        period: "",
+        message: "無料版（API未設定）",
+      }));
       return;
     }
     if (!trimmed) {
-      setProState((p) => ({ ...p, loading: false, verified: true, pro: false, ...defaultsFromProFlag(false), period: "", message: "" }));
+      setProState((p) => ({
+        ...p,
+        loading: false,
+        verified: true,
+        pro: false,
+        ...defaultsFromProFlag(false),
+        period: "",
+        message: "",
+      }));
       return;
     }
     setProState((p) => ({ ...p, loading: true, message: "" }));
     const anonUserId = ensureAnonUserId();
     try {
       const res = await fetch(verifyUrl, {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ anon_user_id: anonUserId, pro_code: trimmed }),
       });
       if (!res.ok) throw new Error("failed");
@@ -472,22 +594,36 @@ export default function App() {
       const periodText = expiresLabel ? `有効期限：${expiresLabel}` : String(data?.period || "");
       const df = defaultsFromProFlag(isPro);
       setProState({
-        loading: false, verified: true, pro: isPro,
+        loading: false,
+        verified: true,
+        pro: isPro,
         maxNotifications: Number(data?.max_notifications) || df.maxNotifications,
         timer2Allowed: typeof data?.timer2_allowed === "boolean" ? data.timer2_allowed : df.timer2Allowed,
         adsOff: typeof data?.ads_off === "boolean" ? data.ads_off : df.adsOff,
-        expiresAtMs, period: periodText, message: String(data?.message || (isPro ? "PRO" : "無料版")),
+        expiresAtMs,
+        period: periodText,
+        message: String(data?.message || (isPro ? "PRO" : "無料版")),
       });
       if (!isPro) setSettings((p) => ({ ...p, timer2Enabled: false }));
     } catch {
-      setProState((p) => ({ ...p, loading: false, verified: true, pro: false, ...defaultsFromProFlag(false), period: "", message: "検証失敗" }));
+      setProState((p) => ({
+        ...p,
+        loading: false,
+        verified: true,
+        pro: false,
+        ...defaultsFromProFlag(false),
+        period: "",
+        message: "検証失敗",
+      }));
       setSettings((p) => ({ ...p, timer2Enabled: false }));
     }
   }
   useEffect(() => {
     if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
     verifyTimerRef.current = setTimeout(() => verifyProCodeNow(settings.proCode), 600);
-    return () => { if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current); };
+    return () => {
+      if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
+    };
   }, [settings.proCode]);
 
   const isPro = !!proState.pro;
@@ -500,18 +636,29 @@ export default function App() {
   const [testPushState, setTestPushState] = useState({ loading: false, message: "" });
   async function sendTestPushAfter5s(token) {
     const url = apiUrl("/push/test");
-    if (!url) { setTestPushState({ loading: false, message: "API未設定" }); return; }
+    if (!url) {
+      setTestPushState({ loading: false, message: "API未設定" });
+      return;
+    }
     const anonUserId = ensureAnonUserId();
     const t = String(token || "").trim();
     setTestPushState({ loading: true, message: "送信中..." });
     try {
       const res = await fetch(url, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ anon_user_id: anonUserId, token: t, delay_sec: 5, url: `${window.location.origin}/#notifications` }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          anon_user_id: anonUserId,
+          token: t,
+          delay_sec: 5,
+          url: `${window.location.origin}/#notifications`,
+        }),
       });
       if (!res.ok) throw new Error();
       setTestPushState({ loading: false, message: "OK" });
-    } catch { setTestPushState({ loading: false, message: "失敗" }); }
+    } catch {
+      setTestPushState({ loading: false, message: "失敗" });
+    }
   }
 
   async function postDeviceRegisterIfNeeded(token) {
@@ -522,12 +669,24 @@ export default function App() {
     if (!t || localStorage.getItem(STORAGE_FCM_TOKEN_SENT) === t) return;
     try {
       await fetch(url, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ anon_user_id: anonUserId, token: t, platform: "web", ua: navigator.userAgent, origin: window.location.origin, ts: Date.now() }),
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          anon_user_id: anonUserId,
+          token: t,
+          platform: "web",
+          ua: navigator.userAgent,
+          origin: window.location.origin,
+          ts: Date.now(),
+        }),
       });
       localStorage.setItem(STORAGE_FCM_TOKEN_SENT, t);
-    } catch { /* ignore */ }
+      localStorage.setItem(STORAGE_FCM_TOKEN_SENT_AT, String(Date.now()));
+    } catch {
+      /* ignore */
+    }
   }
+
   async function requestPushPermissionAndRegister() {
     try {
       const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
@@ -535,15 +694,19 @@ export default function App() {
       if (perm !== "granted") return;
       const token = await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: reg });
       if (!token) return;
-      setFcmToken(token); localStorage.setItem(STORAGE_FCM_TOKEN, token);
+      setFcmToken(token);
+      localStorage.setItem(STORAGE_FCM_TOKEN, token);
       await postDeviceRegisterIfNeeded(token);
       setSettings((p) => ({ ...p, notificationsEnabled: true }));
-    } catch (e) { alert("失敗: " + e); }
+    } catch (e) {
+      alert("失敗: " + e);
+    }
   }
 
   function toggleVenueOpen(venueKey) {
     setOpenVenues((prev) => ({ ...prev, [venueKey]: !prev[venueKey] }));
   }
+
   function setVenueAll(venue, on) {
     setToggled((prev) => {
       const next = { ...prev };
@@ -567,13 +730,10 @@ export default function App() {
   function toggleGirlsAll(on) {
     setToggled((prev) => {
       const next = { ...prev };
-      // 対象レースを抽出
       const targetRaces = [];
       for (const v of venues) {
         for (const r of v.races) {
-          if (r.classCategory && r.classCategory.includes("Ｌ級")) {
-            targetRaces.push(r);
-          }
+          if (r.classCategory && r.classCategory.includes("Ｌ級")) targetRaces.push(r);
         }
       }
       if (!on) {
@@ -595,41 +755,60 @@ export default function App() {
   function toggleRace(raceKey) {
     const anonUserId = ensureAnonUserId();
     const race = raceMap.get(raceKey);
+
     setToggled((prev) => {
       const next = { ...prev };
+
       if (next[raceKey]) {
         delete next[raceKey];
         postSubscriptionSetToServer({ anon_user_id: anonUserId, race_key: raceKey, enabled: false });
         return next;
       }
+
       if (Object.keys(next).length >= maxNotifications) {
         alert(`通知は最大 ${maxNotifications} 件までです。`);
         return next;
       }
+
       next[raceKey] = true;
+
       if (race) {
         const t1 = Number(settings.timer1MinutesBefore);
         const t2 = Number(settings.timer2MinutesBefore);
         const isAuto = race.mode === MODE_AUTORACE;
         const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
-        const notifyUrl = getLinkUrl(targetKey, race.url, race.mode);
+
+        // ★修正：notify_url が空ならアプリへフォールバック（サーバー必須でも落ちない）
+        const appFallbackUrl = `${window.location.origin}/#notifications`;
+        const notifyUrl = getLinkUrl(targetKey, race.url, race.mode) || appFallbackUrl;
+
         const payload = {
-          anon_user_id: anonUserId, race_key: raceKey, enabled: true,
-          race_date: todayKeyYYYYMMDD(), closed_at_hhmm: race.closedAtHHMM,
-          race_url: race.url, link_target: targetKey, notify_url: notifyUrl,
+          anon_user_id: anonUserId,
+          race_key: raceKey,
+          enabled: true,
+          race_date: todayKeyYYYYMMDD(),
+          closed_at_hhmm: race.closedAtHHMM,
+          // ★修正：race_url も空なら notifyUrl を入れておく（サーバー実装次第で重要）
+          race_url: race.url || notifyUrl,
+          link_target: targetKey,
+          notify_url: notifyUrl,
           title: `${race.venueName}${race.raceNo}R`,
           timer1_min: Number.isFinite(t1) ? t1 : 5,
-          timer2_enabled: !!timer2Active, timer2_min: Number.isFinite(t2) ? t2 : 1,
+          timer2_enabled: !!timer2Active,
+          timer2_min: Number.isFinite(t2) ? t2 : 1,
         };
         postSubscriptionSetToServer(payload);
       }
+
       return next;
     });
   }
 
   async function removeNotification(raceKey) {
     setToggled((prev) => {
-      const next = { ...prev }; delete next[raceKey]; return next;
+      const next = { ...prev };
+      delete next[raceKey];
+      return next;
     });
     const anonUserId = ensureAnonUserId();
     await trySendRemoveToServer({ anonUserId, raceKey });
@@ -640,30 +819,46 @@ export default function App() {
   useEffect(() => {
     const hasApi = !!apiUrl("/subscriptions/set");
     if (!hasApi) return;
+
     const keys = Object.keys(toggled || {});
     if (keys.length === 0) return;
+
     if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
+
     resyncTimerRef.current = setTimeout(() => {
       const anonUserId = ensureAnonUserId();
       for (const raceKey of keys) {
         const race = raceMap.get(raceKey);
         if (!race) continue;
+
         const t1 = Number(settings.timer1MinutesBefore);
         const t2 = Number(settings.timer2MinutesBefore);
         const isAuto = race.mode === MODE_AUTORACE;
         const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
-        const notifyUrl = getLinkUrl(targetKey, race.url, race.mode);
+
+        // ★修正：ここも同じフォールバック
+        const appFallbackUrl = `${window.location.origin}/#notifications`;
+        const notifyUrl = getLinkUrl(targetKey, race.url, race.mode) || appFallbackUrl;
+
         postSubscriptionSetToServer({
-          anon_user_id: anonUserId, race_key: raceKey, enabled: true,
-          closed_at_hhmm: race.closedAtHHMM, race_url: race.url,
-          link_target: targetKey, notify_url: notifyUrl,
+          anon_user_id: anonUserId,
+          race_key: raceKey,
+          enabled: true,
+          closed_at_hhmm: race.closedAtHHMM,
+          race_url: race.url || notifyUrl,
+          link_target: targetKey,
+          notify_url: notifyUrl,
           title: `${race.venueName}${race.raceNo}R`,
           timer1_min: Number.isFinite(t1) ? t1 : 5,
-          timer2_enabled: !!timer2Active, timer2_min: Number.isFinite(t2) ? t2 : 1,
+          timer2_enabled: !!timer2Active,
+          timer2_min: Number.isFinite(t2) ? t2 : 1,
         });
       }
     }, 450);
-    return () => { if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current); };
+
+    return () => {
+      if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
+    };
   }, [settings, timer2Active, toggled, raceMap]);
 
   // ===== Header =====
@@ -672,26 +867,56 @@ export default function App() {
       <header style={styles.header}>
         <div style={styles.headerTop}>
           <div style={styles.titleRow}>
-            <div style={styles.title}>{APP_TITLE} <span style={{ opacity: 0.9 }}>🐾</span></div>
+            <div style={styles.title}>
+              {APP_TITLE} <span style={{ opacity: 0.9 }}>🐾</span>
+            </div>
             <div style={styles.dateInline}>{todayLabel}</div>
           </div>
+
           <div style={styles.rightHead}>
-            <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">⚙︎</button>
+            <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">
+              ⚙︎
+            </button>
             {rightHomeIcon === "notifications" ? (
-              <button className="iconBtn" onClick={() => setHash("notifications")} aria-label="notifications">☰</button>
+              <button className="iconBtn" onClick={() => setHash("notifications")} aria-label="notifications">
+                ☰
+              </button>
             ) : (
-              <button className="iconBtn" onClick={() => setHash("home")} aria-label="home">⌂</button>
+              <button className="iconBtn" onClick={() => setHash("home")} aria-label="home">
+                ⌂
+              </button>
             )}
           </div>
         </div>
+
         <div style={styles.modeRow}>
           <div style={styles.modeSwitch}>
-            <button className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`} onClick={() => setMode(MODE_KEIRIN)}>競輪</button>
-            <button className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`} onClick={() => setMode(MODE_AUTORACE)}>オート</button>
+            {/* ★改善：通知一覧にいるとき、競輪/オートを押したらhomeへ戻す */}
+            <button
+              className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`}
+              onClick={() => {
+                setMode(MODE_KEIRIN);
+                if (route === "notifications") setHash("home");
+              }}
+            >
+              競輪
+            </button>
+            <button
+              className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`}
+              onClick={() => {
+                setMode(MODE_AUTORACE);
+                if (route === "notifications") setHash("home");
+              }}
+            >
+              オート
+            </button>
           </div>
+
           <div className="tinyMeta">
             <span className={`pill ${isPro ? "pillOn" : "pillOff"}`}>{isPro ? "PRO" : "FREE"}</span>
-            <span className="tinyCount">通知 {selectedCount}/{maxNotifications}</span>
+            <span className="tinyCount">
+              通知 {selectedCount}/{maxNotifications}
+            </span>
           </div>
         </div>
       </header>
@@ -705,21 +930,31 @@ export default function App() {
         <style>{cssText}</style>
         <Header rightHomeIcon="home" />
         <NotificationsPage
-          venues={venues} toggled={toggled} settings={settings}
-          onBack={() => setHash("home")} onRemoveRaceKey={removeNotification}
+          venues={venues}
+          toggled={toggled}
+          settings={settings}
+          onBack={() => setHash("home")}
+          onRemoveRaceKey={removeNotification}
         />
         {settingsOpen && (
           <SettingsModal
-            onClose={() => setSettingsOpen(false)} settings={settings} setSettings={setSettings}
-            fcmToken={fcmToken} onRequestPushPermission={requestPushPermissionAndRegister}
-            onSendTestPush={sendTestPushAfter5s} testPushState={testPushState}
-            proState={proState} isPro={isPro}
+            onClose={() => setSettingsOpen(false)}
+            settings={settings}
+            setSettings={setSettings}
+            fcmToken={fcmToken}
+            onRequestPushPermission={requestPushPermissionAndRegister}
+            onSendTestPush={sendTestPushAfter5s}
+            testPushState={testPushState}
+            proState={proState}
+            isPro={isPro}
             onVerifyProCode={(code) => {
               if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
               verifyProCodeNow(code);
             }}
-            maxNotifications={maxNotifications} selectedCount={selectedCount}
-            timer2GateOpen={timer2GateOpen} setToggled={setToggled}
+            maxNotifications={maxNotifications}
+            selectedCount={selectedCount}
+            timer2GateOpen={timer2GateOpen}
+            setToggled={setToggled}
           />
         )}
       </div>
@@ -751,12 +986,15 @@ export default function App() {
                 <span className="venueName">ガールズ開催のみ ({girlsRacesList.length}R)</span>
               </div>
               <div className="venueActions" onClick={(e) => e.stopPropagation()}>
-                <button className="smallBtn on" onClick={() => toggleGirlsAll(true)} title="まとめてON">ON</button>
-                <button className="smallBtn off" onClick={() => toggleGirlsAll(false)} title="まとめてOFF">OFF</button>
+                <button className="smallBtn on" onClick={() => toggleGirlsAll(true)} title="まとめてON">
+                  ON
+                </button>
+                <button className="smallBtn off" onClick={() => toggleGirlsAll(false)} title="まとめてOFF">
+                  OFF
+                </button>
               </div>
             </div>
 
-            {/* 開いた時だけリスト表示 */}
             {girlsAccordionOpen && (
               <div className="raceList">
                 {girlsRacesList.map((r) => {
@@ -769,24 +1007,47 @@ export default function App() {
                     <div key={`g_${r.raceKey}`} className={`raceRow ${ended ? "ended" : ""}`}>
                       <div className="raceLeft">
                         <div className="raceTopLine">
-                          <span style={{ fontSize: 11, fontWeight: 900, background: "#eee", padding: "2px 6px", borderRadius: 4, marginRight: 6 }}>
+                          <span
+                            style={{
+                              fontSize: 11,
+                              fontWeight: 900,
+                              background: "#eee",
+                              padding: "2px 6px",
+                              borderRadius: 4,
+                              marginRight: 6,
+                            }}
+                          >
                             {r.venueName}
                           </span>
                           <div className="raceNo">{r.raceNo}R</div>
-                          <div className="raceDeadline">締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b></div>
-                          <a className="raceLink" href={link || "#"} target="_blank" rel="noopener noreferrer" onClick={(e) => { if (!link) e.preventDefault(); }}>
+                          <div className="raceDeadline">
+                            締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b>
+                          </div>
+                          <a
+                            className="raceLink"
+                            href={link || "#"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => {
+                              if (!link) e.preventDefault();
+                            }}
+                          >
                             レース情報
                           </a>
                         </div>
-                        {/* 選手名 */}
-                        {r.players && r.players.length > 0 && (
-                          <div className="racePlayers">{r.players.join("　")}</div>
-                        )}
+
+                        {r.players && r.players.length > 0 && <div className="racePlayers">{r.players.join("　")}</div>}
                       </div>
+
                       <div className="raceRight">
                         <div className="toggleWrap">
                           <label className="toggle">
-                            <input type="checkbox" checked={checked} onChange={() => toggleRace(r.raceKey)} disabled={ended} />
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleRace(r.raceKey)}
+                              disabled={ended}
+                            />
                             <span className="slider" />
                           </label>
                         </div>
@@ -800,10 +1061,17 @@ export default function App() {
         )}
 
         {loading && <div className="card">読み込み中…</div>}
-        {!loading && err && <div className="card error"><div style={{ fontWeight: 700 }}>読み込み失敗</div><div>{err}</div></div>}
+        {!loading && err && (
+          <div className="card error">
+            <div style={{ fontWeight: 700 }}>読み込み失敗</div>
+            <div>{err}</div>
+          </div>
+        )}
         {!loading && !err && venues.length === 0 && <div className="card">今日のデータがありません。</div>}
 
-        {!loading && !err && venues.map((v) => {
+        {!loading &&
+          !err &&
+          venues.map((v) => {
             const isOpen = !!openVenues[v.venueKey];
             return (
               <section className="card" key={v.venueKey}>
@@ -814,8 +1082,12 @@ export default function App() {
                     {v.grade ? <span className="grade">{v.grade}</span> : null}
                   </div>
                   <div className="venueActions" onClick={(e) => e.stopPropagation()}>
-                    <button className="smallBtn on" onClick={() => setVenueAll(v, true)}>ON</button>
-                    <button className="smallBtn off" onClick={() => setVenueAll(v, false)}>OFF</button>
+                    <button className="smallBtn on" onClick={() => setVenueAll(v, true)}>
+                      ON
+                    </button>
+                    <button className="smallBtn off" onClick={() => setVenueAll(v, false)}>
+                      OFF
+                    </button>
                   </div>
                 </div>
 
@@ -835,20 +1107,34 @@ export default function App() {
                             <div className="raceTopLine">
                               <div className="raceNo">{r.raceNo}R</div>
                               <div className="raceTitle">{r.title}</div>
-                              <div className="raceDeadline">締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b></div>
-                              <a className="raceLink" href={link || "#"} target="_blank" rel="noopener noreferrer" onClick={(e) => { if (!link) e.preventDefault(); }}>
+                              <div className="raceDeadline">
+                                締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b>
+                              </div>
+                              <a
+                                className="raceLink"
+                                href={link || "#"}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => {
+                                  if (!link) e.preventDefault();
+                                }}
+                              >
                                 レース情報
                               </a>
                             </div>
-                            {/* ★選手名表示 */}
-                            {r.players && r.players.length > 0 && (
-                              <div className="racePlayers">{r.players.join("　")}</div>
-                            )}
+
+                            {r.players && r.players.length > 0 && <div className="racePlayers">{r.players.join("　")}</div>}
                           </div>
+
                           <div className="raceRight">
                             <div className="toggleWrap">
                               <label className="toggle">
-                                <input type="checkbox" checked={checked} onChange={() => toggleRace(r.raceKey)} disabled={ended} />
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleRace(r.raceKey)}
+                                  disabled={ended}
+                                />
                                 <span className="slider" />
                               </label>
                             </div>
@@ -865,16 +1151,23 @@ export default function App() {
 
       {settingsOpen && (
         <SettingsModal
-          onClose={() => setSettingsOpen(false)} settings={settings} setSettings={setSettings}
-          fcmToken={fcmToken} onRequestPushPermission={requestPushPermissionAndRegister}
-          onSendTestPush={sendTestPushAfter5s} testPushState={testPushState}
-          proState={proState} isPro={isPro}
+          onClose={() => setSettingsOpen(false)}
+          settings={settings}
+          setSettings={setSettings}
+          fcmToken={fcmToken}
+          onRequestPushPermission={requestPushPermissionAndRegister}
+          onSendTestPush={sendTestPushAfter5s}
+          testPushState={testPushState}
+          proState={proState}
+          isPro={isPro}
           onVerifyProCode={(code) => {
             if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
             verifyProCodeNow(code);
           }}
-          maxNotifications={maxNotifications} selectedCount={selectedCount}
-          timer2GateOpen={timer2GateOpen} setToggled={setToggled}
+          maxNotifications={maxNotifications}
+          selectedCount={selectedCount}
+          timer2GateOpen={timer2GateOpen}
+          setToggled={setToggled}
         />
       )}
     </div>
@@ -883,17 +1176,44 @@ export default function App() {
 
 /* ===== 設定モーダル ===== */
 function SettingsModal({
-  onClose, settings, setSettings, fcmToken, onRequestPushPermission,
-  onSendTestPush, testPushState, proState, isPro, onVerifyProCode,
-  maxNotifications, selectedCount, timer2GateOpen, setToggled,
+  onClose,
+  settings,
+  setSettings,
+  fcmToken,
+  onRequestPushPermission,
+  onSendTestPush,
+  testPushState,
+  proState,
+  isPro,
+  onVerifyProCode,
+  maxNotifications,
+  selectedCount,
+  timer2GateOpen,
+  setToggled,
 }) {
-  const canRequest = (() => { try { return "Notification" in window && "serviceWorker" in navigator; } catch { return false; } })();
-  const permission = (() => { try { return "Notification" in window ? Notification.permission : "unsupported"; } catch { return "unsupported"; } })();
+  const canRequest = (() => {
+    try {
+      return "Notification" in window && "serviceWorker" in navigator;
+    } catch {
+      return false;
+    }
+  })();
+  const permission = (() => {
+    try {
+      return "Notification" in window ? Notification.permission : "unsupported";
+    } catch {
+      return "unsupported";
+    }
+  })();
   const canTest = !!fcmToken && permission === "granted" && !!onSendTestPush;
   const proStatusLabel = String(proState?.message || "");
   const timer2EnabledUI = !!settings.timer2Enabled;
   const timer2ToggleDisabled = !timer2GateOpen;
-  function resetAllSelections() { setToggled?.({}); setSettings((s) => ({ ...s, __resetAll: Date.now() })); }
+
+  function resetAllSelections() {
+    setToggled?.({});
+    setSettings((s) => ({ ...s, __resetAll: Date.now() }));
+  }
 
   return (
     <div className="modalBack" onClick={onClose}>
@@ -901,9 +1221,12 @@ function SettingsModal({
         <div className="modalHead settingsHeader">
           <div className="modalTitle">設定</div>
           <div className="settingsHeaderRight">
-            <button type="button" className="iconBtn closeBtn" onClick={onClose} aria-label="close">✕</button>
+            <button type="button" className="iconBtn closeBtn" onClick={onClose} aria-label="close">
+              ✕
+            </button>
           </div>
         </div>
+
         <div className="modalBody">
           <div className="row">
             <div className="label">Push通知</div>
@@ -912,59 +1235,112 @@ function SettingsModal({
                 <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5 }}>利用不可</div>
               ) : permission === "granted" ? (
                 <div className="pushGrantRow">
-                  <div className="pushGrantLeft"><div style={{ fontWeight: 900 }}>許可済み</div></div>
+                  <div className="pushGrantLeft">
+                    <div style={{ fontWeight: 900 }}>許可済み</div>
+                  </div>
                   <div className="pushGrantRight">
                     <div style={{ fontWeight: 900, letterSpacing: 0.2 }}>ON</div>
-                    <button type="button" className="btn small pushTestBtn" onClick={() => onSendTestPush?.(fcmToken)} disabled={!canTest || !!testPushState?.loading}>
+                    <button
+                      type="button"
+                      className="btn small pushTestBtn"
+                      onClick={() => onSendTestPush?.(fcmToken)}
+                      disabled={!canTest || !!testPushState?.loading}
+                    >
                       {testPushState?.loading ? "送信中…" : "テスト（5秒後）"}
                     </button>
                   </div>
                 </div>
               ) : (
-                <button type="button" className="btn" onClick={onRequestPushPermission}>通知を許可する</button>
+                <button type="button" className="btn" onClick={onRequestPushPermission}>
+                  通知を許可する
+                </button>
               )}
             </div>
           </div>
+
           <div className="row">
             <div className="label">1つ目タイマー</div>
-            <select value={String(settings.timer1MinutesBefore)} onChange={(e) => setSettings((s) => ({ ...s, timer1MinutesBefore: e.target.value }))}>
-              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (<option key={m} value={String(m)}>{m} 分前</option>))}
+            <select
+              value={String(settings.timer1MinutesBefore)}
+              onChange={(e) => setSettings((s) => ({ ...s, timer1MinutesBefore: e.target.value }))}
+            >
+              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (
+                <option key={m} value={String(m)}>
+                  {m} 分前
+                </option>
+              ))}
             </select>
           </div>
+
           <div className="row">
             <div className="label">2つ目タイマー</div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
               <label className="toggle">
-                <input type="checkbox" checked={!!settings.timer2Enabled} onChange={(e) => setSettings((s) => ({ ...s, timer2Enabled: e.target.checked }))} disabled={timer2ToggleDisabled} />
+                <input
+                  type="checkbox"
+                  checked={!!settings.timer2Enabled}
+                  onChange={(e) => setSettings((s) => ({ ...s, timer2Enabled: e.target.checked }))}
+                  disabled={timer2ToggleDisabled}
+                />
                 <span className="slider" />
               </label>
-              <div style={{ opacity: timer2GateOpen ? 1 : 0.7, fontWeight: 800 }}>{timer2EnabledUI ? "ON" : "OFF"}</div>
+              <div style={{ opacity: timer2GateOpen ? 1 : 0.7, fontWeight: 800 }}>
+                {timer2EnabledUI ? "ON" : "OFF"}
+              </div>
             </div>
             {!timer2GateOpen ? <div className="hint">PRO版で解放</div> : null}
           </div>
+
           <div className="row">
             <div className="label">2回目（分前）</div>
-            <select value={String(settings.timer2MinutesBefore)} onChange={(e) => setSettings((s) => ({ ...s, timer2MinutesBefore: e.target.value }))} disabled={!timer2GateOpen || !settings.timer2Enabled}>
-              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (<option key={m} value={String(m)}>{m} 分前</option>))}
+            <select
+              value={String(settings.timer2MinutesBefore)}
+              onChange={(e) => setSettings((s) => ({ ...s, timer2MinutesBefore: e.target.value }))}
+              disabled={!timer2GateOpen || !settings.timer2Enabled}
+            >
+              {[1, 2, 3, 4, 5, 7, 10, 15].map((m) => (
+                <option key={m} value={String(m)}>
+                  {m} 分前
+                </option>
+              ))}
             </select>
           </div>
+
           <div className="row">
             <div className="label">通知先(競輪)</div>
             <select value={settings.linkTarget} onChange={(e) => setSettings((s) => ({ ...s, linkTarget: e.target.value }))}>
-              {LINK_TARGETS_KEIRIN.map((t) => (<option key={t.key} value={t.key}>{t.label}</option>))}
+              {LINK_TARGETS_KEIRIN.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
             </select>
           </div>
+
           <div className="row">
             <div className="label">通知先(オート)</div>
-            <select value={settings.linkTargetAuto} onChange={(e) => setSettings((s) => ({ ...s, linkTargetAuto: e.target.value }))}>
-              {LINK_TARGETS_AUTO.map((t) => (<option key={t.key} value={t.key}>{t.label}</option>))}
+            <select
+              value={settings.linkTargetAuto}
+              onChange={(e) => setSettings((s) => ({ ...s, linkTargetAuto: e.target.value }))}
+            >
+              {LINK_TARGETS_AUTO.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
             </select>
           </div>
+
           <div className="row">
             <div className="label">コード入力</div>
             <div style={{ display: "grid", gap: 8 }}>
               <div className="codeRow">
-                <input className="codeInput" value={settings.proCode || ""} onChange={(e) => setSettings((s) => ({ ...s, proCode: e.target.value }))} placeholder="コードを入力" />
+                <input
+                  className="codeInput"
+                  value={settings.proCode || ""}
+                  onChange={(e) => setSettings((s) => ({ ...s, proCode: e.target.value }))}
+                  placeholder="コードを入力"
+                />
                 <button type="button" className="btn small" onClick={() => onVerifyProCode?.(settings.proCode)} disabled={!!proState?.loading}>
                   {proState?.loading ? "送信中…" : "送信"}
                 </button>
@@ -975,19 +1351,28 @@ function SettingsModal({
               </div>
             </div>
           </div>
+
           <div className="row">
             <div className="label">通知上限</div>
-            <div style={{ fontWeight: 800 }}>現在：{selectedCount} 件 / 上限：{maxNotifications} 件</div>
+            <div style={{ fontWeight: 800 }}>
+              現在：{selectedCount} 件 / 上限：{maxNotifications} 件
+            </div>
           </div>
+
           <div className="row">
             <div className="label">選択のリセット</div>
             <div style={{ display: "grid", gap: 8 }}>
-              <button type="button" className="btn danger" onClick={resetAllSelections}>すべて解除</button>
+              <button type="button" className="btn danger" onClick={resetAllSelections}>
+                すべて解除
+              </button>
             </div>
           </div>
         </div>
+
         <div className="modalFoot">
-          <button type="button" className="btn" onClick={onClose}>閉じる</button>
+          <button type="button" className="btn" onClick={onClose}>
+            閉じる
+          </button>
         </div>
       </div>
     </div>
@@ -996,8 +1381,22 @@ function SettingsModal({
 
 /* ===== style ===== */
 const styles = {
-  page: { minHeight: "100vh", background: "#F6F7F3", color: "#111", fontFamily: 'system-ui, -apple-system, sans-serif', fontWeight: 400 },
-  header: { position: "sticky", top: 0, zIndex: 5, backdropFilter: "blur(10px)", background: "rgba(246,247,243,0.90)", borderBottom: "1px solid rgba(0,0,0,0.06)", padding: "12px 12px 10px" },
+  page: {
+    minHeight: "100vh",
+    background: "#F6F7F3",
+    color: "#111",
+    fontFamily: "system-ui, -apple-system, sans-serif",
+    fontWeight: 400,
+  },
+  header: {
+    position: "sticky",
+    top: 0,
+    zIndex: 5,
+    backdropFilter: "blur(10px)",
+    background: "rgba(246,247,243,0.90)",
+    borderBottom: "1px solid rgba(0,0,0,0.06)",
+    padding: "12px 12px 10px",
+  },
   headerTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 },
   titleRow: { display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 },
   title: { fontSize: 18, fontWeight: 900, letterSpacing: 0.2, whiteSpace: "nowrap" },
@@ -1022,8 +1421,9 @@ button, input, select{ font: inherit; } select, input{ border: 1px solid rgba(0,
 .btn.danger{ border-color: rgba(220,0,0,0.22); background: rgba(255,240,240,0.9); }
 .adBar{ border: 1px dashed rgba(0,0,0,0.14); background: rgba(0,0,0,0.02); border-radius: 16px; padding: 10px 12px; }
 .adText{ font-weight: 900; } .adSub{ font-size: 12px; opacity: 0.75; margin-top: 2px; }
-.tinyMeta{ display:flex; alignItems:center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; } .tinyCount{ font-size: 12px; opacity: 0.7; white-space: nowrap; }
-.pill{ display:inline-flex; alignItems:center; justify-content:center; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.12); font-weight: 900; font-size: 12px; white-space: nowrap; }
+.tinyMeta{ display:flex; align-items:center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.tinyCount{ font-size: 12px; opacity: 0.7; white-space: nowrap; }
+.pill{ display:inline-flex; align-items:center; justify-content:center; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.12); font-weight: 900; font-size: 12px; white-space: nowrap; }
 .pillOn{ background: var(--accent2); border-color: rgba(46,111,62,0.25); } .pillOff{ background: rgba(0,0,0,0.02); opacity: 0.9; }
 .venueHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; cursor: pointer; }
 .venueTitle{ display:flex; align-items:center; gap: 10px; min-width: 0; }
