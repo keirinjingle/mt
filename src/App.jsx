@@ -3,11 +3,7 @@ import { getToken, onMessage } from "firebase/messaging";
 import { messaging, VAPID_KEY } from "./firebase";
 
 /**
- * もふタイマー Web（修正版）
- *
- * 修正内容：
- * 1. 通知重複防止 (tag設定)
- * 2. 競輪/オートレースの通知先URL設定を分離
+ * もふタイマー Web（選手名表示 + ガールズ一括 + テキスト出力）
  */
 
 const APP_TITLE = "もふタイマー";
@@ -41,7 +37,7 @@ function apiUrl(path) {
 const STORAGE_USER_ID = "mofu_anon_user_id";
 const STORAGE_OPEN_VENUES = "mofu_open_venues_v1";
 const STORAGE_TOGGLED = "mofu_race_toggled_v1";
-const STORAGE_SETTINGS = "mofu_settings_v5"; // バージョン上げました(自動移行は互換性維持で対応)
+const STORAGE_SETTINGS = "mofu_settings_v5";
 
 /** token関連 */
 const STORAGE_FCM_TOKEN = "mofu_fcm_token_v1";
@@ -52,8 +48,8 @@ const DEFAULT_SETTINGS = {
   timer1MinutesBefore: 5,
   timer2Enabled: false,
   timer2MinutesBefore: 2,
-  linkTarget: "json", // 競輪用（既存互換）
-  linkTargetAuto: "autoracejp", // オート用（新規）
+  linkTarget: "json", // 競輪用
+  linkTargetAuto: "autoracejp", // オート用
   proCode: "",
   notificationsEnabled: false,
 };
@@ -76,15 +72,12 @@ const LINK_TARGETS_AUTO = [
   { key: "json", label: "投票サイトへ飛ばない" },
 ];
 
-/**
- * リンク生成ロジック（モード対応）
- */
 function getLinkUrl(linkTargetKey, raceUrlFromJson, mode) {
   // --- オートレース ---
   if (mode === MODE_AUTORACE) {
     switch (linkTargetKey) {
       case "autoracejp":
-        return "https://autorace.jp/"; // 公式（詳細URL構築が難しいためトップへ）
+        return "https://autorace.jp/";
       case "oddspark":
         return "https://www.oddspark.com/autorace/";
       case "chariloto":
@@ -93,11 +86,9 @@ function getLinkUrl(linkTargetKey, raceUrlFromJson, mode) {
         return "https://www.winticket.jp/autorace/";
       case "json":
       default:
-        // オートのJSONには有効なURLがない場合が多いので空文字か、もしあれば使う
         return raceUrlFromJson || "";
     }
   }
-
   // --- 競輪 ---
   switch (linkTargetKey) {
     case "json":
@@ -126,13 +117,11 @@ function todayKeyYYYYMMDD() {
 function toYYYYMMDD(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
-
 function formatYMD_JP(ms) {
   if (!ms || !Number.isFinite(Number(ms))) return "";
   const d = new Date(Number(ms));
   return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
 }
-
 function toHHMM(dateObj) {
   return `${pad2(dateObj.getHours())}:${pad2(dateObj.getMinutes())}`;
 }
@@ -225,14 +214,11 @@ function normalizeRace(r, mode, v, ri) {
   const date = todayKeyYYYYMMDD();
   const raceKey = `${date}_${venueKey}_${pad2(raceNo)}`;
 
-  return { raceKey, venueKey, venueName, raceNo, title, closedAtHHMM, url, mode }; // modeを追加保持
-}
+  // ★追加: 選手データとクラスカテゴリ
+  const players = Array.isArray(r.players) ? r.players : [];
+  const classCategory = r.class_category || r.classCategory || "";
 
-function computeNotifyAt(race, minutesBefore) {
-  const closed = parseHHMMToday(race.closedAtHHMM);
-  const m = Number(minutesBefore);
-  if (!closed || !Number.isFinite(m)) return null;
-  return addMinutes(closed, -m);
+  return { raceKey, venueKey, venueName, raceNo, title, closedAtHHMM, url, mode, players, classCategory };
 }
 
 /* ===== サーバー連携 ===== */
@@ -270,11 +256,11 @@ function NotificationsPage({
   venues,
   toggled,
   settings,
-  timer2Active,
   onBack,
   onRemoveRaceKey,
-  mode, // 現在の表示モードではなく、リスト生成時は全レース対象だが、リンク生成に必要
 }) {
+  const [showText, setShowText] = useState(false);
+
   const raceMap = useMemo(() => {
     const m = new Map();
     for (const v of venues) for (const r of v.races) m.set(r.raceKey, r);
@@ -287,8 +273,7 @@ function NotificationsPage({
     const list = [];
     for (const rk of selectedRaceKeys) {
       const r = raceMap.get(rk);
-      if (!r) continue; // venuesにない（過去のレースや別モード）は表示されない可能性あり
-
+      if (!r) continue;
       const closedAt = parseHHMMToday(r.closedAtHHMM);
       list.push({
         raceKey: rk,
@@ -298,34 +283,72 @@ function NotificationsPage({
         closedAt,
         closedAtHHMM: r.closedAtHHMM,
         url: r.url,
-        mode: r.mode, // レースデータに含まれるmode
+        mode: r.mode,
       });
     }
-
     list.sort((a, b) => {
       if (a.venueName !== b.venueName) return a.venueName.localeCompare(b.venueName, "ja");
       return (a.raceNo || 0) - (b.raceNo || 0);
     });
-
     return list;
   }, [selectedRaceKeys, raceMap]);
+
+  const textData = useMemo(() => {
+    return rows
+      .map((r) => {
+        // テキスト表示用URL
+        const targetKey =
+          r.mode === MODE_AUTORACE ? settings.linkTargetAuto : settings.linkTarget;
+        const link = getLinkUrl(targetKey, r.url, r.mode);
+        return `${r.venueName} ${r.raceNo}R ${r.closedAtHHMM}締切\n${link}`;
+      })
+      .join("\n\n");
+  }, [rows, settings]);
 
   return (
     <main style={styles.main}>
       <section className="card">
         <div className="pageHead">
           <div className="pageTitle">通知一覧</div>
-          <button className="btn" onClick={onBack}>
-            戻る
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className={`smallBtn ${showText ? "on" : ""}`}
+              onClick={() => setShowText(!showText)}
+            >
+              テキスト表示
+            </button>
+            <button className="btn" onClick={onBack}>
+              戻る
+            </button>
+          </div>
         </div>
+
+        {showText && (
+          <div style={{ marginBottom: 16 }}>
+            <textarea
+              readOnly
+              style={{
+                width: "100%",
+                height: 200,
+                fontSize: 13,
+                padding: 8,
+                borderRadius: 8,
+                border: "1px solid #ccc",
+                background: "#f9f9f9",
+              }}
+              value={textData}
+            />
+            <div style={{ fontSize: 12, opacity: 0.7, textAlign: "right" }}>
+              コピーして使ってください
+            </div>
+          </div>
+        )}
 
         {rows.length === 0 ? (
           <div style={{ opacity: 0.85 }}>通知がありません。</div>
         ) : (
           <div className="notifyList">
             {rows.map((x) => {
-              // レース個別のモードを見てURL生成
               const targetKey =
                 x.mode === MODE_AUTORACE ? settings.linkTargetAuto : settings.linkTarget;
               const link = getLinkUrl(targetKey, x.url, x.mode);
@@ -415,7 +438,6 @@ export default function App() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
-
   const [fcmToken, setFcmToken] = useState(() => localStorage.getItem(STORAGE_FCM_TOKEN) || "");
 
   // PRO状態
@@ -442,7 +464,6 @@ export default function App() {
     let alive = true;
     setLoading(true);
     setErr("");
-
     fetchRacesJson(mode)
       .then((j) => {
         if (!alive) return;
@@ -457,7 +478,6 @@ export default function App() {
         if (!alive) return;
         setLoading(false);
       });
-
     return () => {
       alive = false;
     };
@@ -485,42 +505,32 @@ export default function App() {
           if (!payload) return;
           if (!("Notification" in window)) return;
           if (Notification.permission !== "granted") return;
-
           const title = payload?.notification?.title || payload?.data?.title || "もふタイマー";
           const body = payload?.notification?.body || payload?.data?.body || "";
           const icon = payload?.notification?.icon || payload?.data?.icon;
-
           const url =
             payload?.fcmOptions?.link || payload?.data?.url || "https://mt.qui2.net/#notifications";
-
-          // ★修正：重複防止のためのタグ (race_keyがあればそれを使う)
           const tag = payload?.data?.race_key || undefined;
-
           const options = {
             body,
             icon,
             data: { ...(payload?.data || {}), url },
-            tag, // ★ここに追加：同じタグの通知は上書きされる
-            renotify: true, // 上書き時にも音やバイブを鳴らすならtrue
+            tag,
+            renotify: true,
           };
-
           const reg = await navigator.serviceWorker?.ready;
           if (reg?.showNotification) {
             await reg.showNotification(title, options);
             return;
           }
-
           new Notification(title, options);
         } catch {
           // ignore
         }
       }
-
       const unsub = onMessage(messaging, (payload) => {
-        console.log("[FCM foreground message]", payload);
         showForegroundNotification(payload);
       });
-
       return () => unsub();
     } catch {
       // ignore
@@ -538,7 +548,6 @@ export default function App() {
 
   // ===== PRO検証 =====
   const verifyTimerRef = useRef(null);
-
   function defaultsFromProFlag(isPro) {
     return {
       maxNotifications: isPro ? 999 : 10,
@@ -546,7 +555,6 @@ export default function App() {
       adsOff: !!isPro,
     };
   }
-
   async function verifyProCodeNow(code) {
     const trimmed = String(code || "").trim();
     const verifyUrl = apiUrl("/pro/verify");
@@ -562,7 +570,6 @@ export default function App() {
       }));
       return;
     }
-
     if (!trimmed) {
       setProState((p) => ({
         ...p,
@@ -575,10 +582,8 @@ export default function App() {
       }));
       return;
     }
-
     setProState((p) => ({ ...p, loading: true, message: "" }));
     const anonUserId = ensureAnonUserId();
-
     try {
       const res = await fetch(verifyUrl, {
         method: "POST",
@@ -586,7 +591,6 @@ export default function App() {
         body: JSON.stringify({ anon_user_id: anonUserId, pro_code: trimmed }),
       });
       if (!res.ok) throw new Error(`verify failed: ${res.status}`);
-
       const data = await res.json();
       const plan = String(data?.plan || (data?.pro ? "PRO" : "FREE")).toUpperCase();
       const isPro = plan === "PRO";
@@ -603,7 +607,6 @@ export default function App() {
       const timer2Allowed =
         typeof data?.timer2_allowed === "boolean" ? data.timer2_allowed : df.timer2Allowed;
       const adsOff = typeof data?.ads_off === "boolean" ? data.ads_off : df.adsOff;
-
       setProState({
         loading: false,
         verified: true,
@@ -615,12 +618,10 @@ export default function App() {
         period: periodText,
         message: String(data?.message || (isPro ? "PRO" : "無料版")),
       });
-
       if (!isPro) {
         setSettings((p) => ({ ...p, timer2Enabled: false }));
       }
     } catch (e) {
-      console.error("[PRO verify error]", e);
       setProState((p) => ({
         ...p,
         loading: false,
@@ -628,12 +629,11 @@ export default function App() {
         pro: false,
         ...defaultsFromProFlag(false),
         period: "",
-        message: "検証に失敗しました（FREE扱い）",
+        message: "検証に失敗しました",
       }));
       setSettings((p) => ({ ...p, timer2Enabled: false }));
     }
   }
-
   useEffect(() => {
     const code = settings.proCode;
     if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
@@ -650,27 +650,20 @@ export default function App() {
   const adsOff = !!proState.adsOff;
   const maxNotifications =
     Number(proState.maxNotifications || (isPro ? 999 : 10)) || (isPro ? 999 : 10);
-
   const timer2GateOpen = isPro && timer2Allowed;
   const timer2Active = timer2GateOpen && !!settings.timer2Enabled;
 
   // ===== Push テスト送信 =====
   const [testPushState, setTestPushState] = useState({ loading: false, message: "" });
-
   async function sendTestPushAfter5s(token) {
     const url = apiUrl("/push/test");
     if (!url) {
-      setTestPushState({ loading: false, message: "API未設定のためテストできません" });
+      setTestPushState({ loading: false, message: "API未設定" });
       return;
     }
     const anonUserId = ensureAnonUserId();
     const t = String(token || "").trim();
-    if (!t) {
-      setTestPushState({ loading: false, message: "token が未取得です" });
-      return;
-    }
-
-    setTestPushState({ loading: true, message: "テスト送信を依頼しました…" });
+    setTestPushState({ loading: true, message: "送信中..." });
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -682,15 +675,10 @@ export default function App() {
           url: `${window.location.origin}/#notifications`,
         }),
       });
-      if (!res.ok) throw new Error(`test push failed: ${res.status}`);
-      const data = await res.json().catch(() => ({}));
-      setTestPushState({
-        loading: false,
-        message: String(data?.message || "OK"),
-      });
+      if (!res.ok) throw new Error("failed");
+      setTestPushState({ loading: false, message: "OK" });
     } catch (e) {
-      console.error("[test push error]", e);
-      setTestPushState({ loading: false, message: "テスト送信に失敗" });
+      setTestPushState({ loading: false, message: "失敗" });
     }
   }
 
@@ -703,7 +691,6 @@ export default function App() {
     if (!t) return;
     const lastSent = localStorage.getItem(STORAGE_FCM_TOKEN_SENT) || "";
     if (lastSent === t) return;
-
     try {
       const payload = {
         anon_user_id: anonUserId,
@@ -720,72 +707,29 @@ export default function App() {
       });
       localStorage.setItem(STORAGE_FCM_TOKEN_SENT, t);
       localStorage.setItem(STORAGE_FCM_TOKEN_SENT_AT, String(Date.now()));
-    } catch (e) {
-      console.warn("[devices/register] failed (will retry later)", e);
+    } catch {
+      // ignore
     }
-  }
-
-  // ===== Push購読 =====
-  async function ensurePushSubscribedByClick() {
-    if (!("serviceWorker" in navigator)) throw new Error("No Service Worker support.");
-    if (!("Notification" in window)) throw new Error("No Notification support.");
-
-    const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-    const perm = await Notification.requestPermission();
-    if (perm !== "granted") return null;
-
-    const token = await getToken(messaging, {
-      vapidKey: VAPID_KEY,
-      serviceWorkerRegistration: reg,
-    });
-    return token;
   }
 
   async function requestPushPermissionAndRegister() {
     try {
-      const token = await ensurePushSubscribedByClick();
+      const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") return;
+      const token = await getToken(messaging, {
+        vapidKey: VAPID_KEY,
+        serviceWorkerRegistration: reg,
+      });
       if (!token) return;
       setFcmToken(token);
       localStorage.setItem(STORAGE_FCM_TOKEN, token);
       await postDeviceRegisterIfNeeded(token);
       setSettings((p) => ({ ...p, notificationsEnabled: true }));
     } catch (e) {
-      console.error("[Push subscribe error]", e);
-      alert(`通知の許可に失敗しました: ${String(e?.message || e)}`);
+      alert("失敗: " + e);
     }
   }
-
-  useEffect(() => {
-    let alive = true;
-    async function refreshTokenSilentlyAndResendIfChanged() {
-      try {
-        if (!("serviceWorker" in navigator)) return;
-        if (!("Notification" in window)) return;
-        if (Notification.permission !== "granted") return;
-        const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-        const token = await getToken(messaging, {
-          vapidKey: VAPID_KEY,
-          serviceWorkerRegistration: reg,
-        });
-        if (!alive) return;
-        if (!token) return;
-
-        const prev = localStorage.getItem(STORAGE_FCM_TOKEN) || "";
-        if (prev !== token) {
-          setFcmToken(token);
-          localStorage.setItem(STORAGE_FCM_TOKEN, token);
-        }
-        await postDeviceRegisterIfNeeded(token);
-        setSettings((p) => ({ ...p, notificationsEnabled: true }));
-      } catch {
-        // ignore
-      }
-    }
-    refreshTokenSilentlyAndResendIfChanged();
-    return () => {
-      alive = false;
-    };
-  }, []);
 
   // ===== 選択ロジック =====
   function toggleVenueOpen(venueKey) {
@@ -813,10 +757,45 @@ export default function App() {
     });
   }
 
+  // ★ガールズ一括切り替え機能
+  function toggleGirlsRaces(on) {
+    setToggled((prev) => {
+      const next = { ...prev };
+      
+      // まず対象レースを抽出 (venues内、classCategoryに"Ｌ級"が含まれるもの)
+      const targetRaces = [];
+      for (const v of venues) {
+        for (const r of v.races) {
+          if (r.classCategory && r.classCategory.includes("Ｌ級")) {
+            targetRaces.push(r);
+          }
+        }
+      }
+
+      if (!on) {
+        // OFFにする
+        for (const r of targetRaces) delete next[r.raceKey];
+        return next;
+      }
+
+      // ONにする（上限チェック）
+      let remaining = Math.max(0, maxNotifications - Object.keys(next).length);
+      for (const r of targetRaces) {
+        if (next[r.raceKey]) continue; // 既にONならスルー
+        if (remaining <= 0) break;
+        next[r.raceKey] = true;
+        remaining -= 1;
+      }
+      if (remaining <= 0 && Object.keys(next).length >= maxNotifications) {
+        alert(`通知は最大 ${maxNotifications} 件までです。`);
+      }
+      return next;
+    });
+  }
+
   function toggleRace(raceKey) {
     const anonUserId = ensureAnonUserId();
     const race = raceMap.get(raceKey);
-
     setToggled((prev) => {
       const next = { ...prev };
       // OFF
@@ -829,25 +808,19 @@ export default function App() {
         });
         return next;
       }
-
       // ON
       const currentCount = Object.keys(next).length;
       if (currentCount >= maxNotifications) {
         alert(`通知は最大 ${maxNotifications} 件までです。`);
         return next;
       }
-
       next[raceKey] = true;
-
       if (race) {
         const t1 = Number(settings.timer1MinutesBefore);
         const t2 = Number(settings.timer2MinutesBefore);
-
-        // ★修正: モードに応じてURLを選択
         const isAuto = race.mode === MODE_AUTORACE;
         const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
         const notifyUrl = getLinkUrl(targetKey, race.url, race.mode);
-
         const payload = {
           anon_user_id: anonUserId,
           race_key: raceKey,
@@ -878,29 +851,24 @@ export default function App() {
     await trySendRemoveToServer({ anonUserId, raceKey });
   }
 
-  // ===== 設定変更を同期 =====
+  // 設定変更同期
   const resyncTimerRef = useRef(null);
   useEffect(() => {
     const hasApi = !!apiUrl("/subscriptions/set");
     if (!hasApi) return;
     const keys = Object.keys(toggled || {});
     if (keys.length === 0) return;
-
     if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
     resyncTimerRef.current = setTimeout(() => {
       const anonUserId = ensureAnonUserId();
       for (const raceKey of keys) {
         const race = raceMap.get(raceKey);
         if (!race) continue;
-
         const t1 = Number(settings.timer1MinutesBefore);
         const t2 = Number(settings.timer2MinutesBefore);
-
-        // ★修正: モードに応じて再計算
         const isAuto = race.mode === MODE_AUTORACE;
         const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
         const notifyUrl = getLinkUrl(targetKey, race.url, race.mode);
-
         postSubscriptionSetToServer({
           anon_user_id: anonUserId,
           race_key: raceKey,
@@ -916,22 +884,12 @@ export default function App() {
         });
       }
     }, 450);
-
     return () => {
       if (resyncTimerRef.current) clearTimeout(resyncTimerRef.current);
     };
-  }, [
-    settings.linkTarget,
-    settings.linkTargetAuto, // ★追加
-    settings.timer1MinutesBefore,
-    settings.timer2Enabled,
-    settings.timer2MinutesBefore,
-    timer2Active,
-    toggled,
-    raceMap,
-  ]);
+  }, [settings, timer2Active, toggled, raceMap]);
 
-  // ===== 共通ヘッダー =====
+  // ===== Header =====
   function Header({ rightHomeIcon }) {
     return (
       <header style={styles.header}>
@@ -957,20 +915,15 @@ export default function App() {
             )}
           </div>
         </div>
-
         <div style={styles.modeRow}>
           <div style={styles.modeSwitch}>
             <button className={`chip ${mode === MODE_KEIRIN ? "chipOn" : ""}`} onClick={() => setMode(MODE_KEIRIN)}>
               競輪
             </button>
-            <button
-              className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`}
-              onClick={() => setMode(MODE_AUTORACE)}
-            >
+            <button className={`chip ${mode === MODE_AUTORACE ? "chipOn" : ""}`} onClick={() => setMode(MODE_AUTORACE)}>
               オート
             </button>
           </div>
-
           <div className="tinyMeta">
             <span className={`pill ${isPro ? "pillOn" : "pillOff"}`}>
               {isPro
@@ -996,10 +949,8 @@ export default function App() {
           venues={venues}
           toggled={toggled}
           settings={settings}
-          timer2Active={timer2Active}
           onBack={() => setHash("home")}
           onRemoveRaceKey={removeNotification}
-          mode={mode}
         />
         {settingsOpen && (
           <SettingsModal
@@ -1020,7 +971,6 @@ export default function App() {
             selectedCount={selectedCount}
             timer2GateOpen={timer2GateOpen}
             setToggled={setToggled}
-            mode={mode}
           />
         )}
       </div>
@@ -1043,6 +993,21 @@ export default function App() {
       )}
 
       <main style={styles.main}>
+        {/* ガールズ一括ボタン（競輪モードのみ） */}
+        {mode === MODE_KEIRIN && (
+          <div className="card" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div style={{ fontWeight: 900, fontSize: 14 }}>ガールズ開催のみ</div>
+            <div className="venueActions">
+              <button className="smallBtn on" onClick={() => toggleGirlsRaces(true)}>
+                ON
+              </button>
+              <button className="smallBtn off" onClick={() => toggleGirlsRaces(false)}>
+                OFF
+              </button>
+            </div>
+          </div>
+        )}
+
         {loading && <div className="card">読み込み中…</div>}
         {!loading && err && (
           <div className="card error">
@@ -1080,7 +1045,6 @@ export default function App() {
                       const closedAt = parseHHMMToday(r.closedAtHHMM);
                       const ended = closedAt ? now.getTime() >= closedAt.getTime() : false;
                       const checked = !!toggled[r.raceKey];
-
                       const isAuto = r.mode === MODE_AUTORACE;
                       const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
                       const link = getLinkUrl(targetKey, r.url, r.mode);
@@ -1106,6 +1070,12 @@ export default function App() {
                                 レース情報
                               </a>
                             </div>
+                            {/* ★追加: 選手名表示 */}
+                            {r.players && r.players.length > 0 && (
+                              <div className="racePlayers">
+                                {r.players.join("　")}
+                              </div>
+                            )}
                           </div>
                           <div className="raceRight">
                             <div className="toggleWrap">
@@ -1149,7 +1119,6 @@ export default function App() {
           selectedCount={selectedCount}
           timer2GateOpen={timer2GateOpen}
           setToggled={setToggled}
-          mode={mode}
         />
       )}
     </div>
@@ -1188,16 +1157,13 @@ function SettingsModal({
     }
   })();
   const canTest = !!fcmToken && permission === "granted" && !!onSendTestPush;
-
   const proStatusLabel = String(proState?.message || "");
   const timer2EnabledUI = !!settings.timer2Enabled;
   const timer2ToggleDisabled = !timer2GateOpen;
-
   function resetAllSelections() {
     setToggled?.({});
     setSettings((s) => ({ ...s, __resetAll: Date.now() }));
   }
-
   return (
     <div className="modalBack" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
@@ -1209,15 +1175,13 @@ function SettingsModal({
             </button>
           </div>
         </div>
-
         <div className="modalBody">
-          {/* Push通知 */}
           <div className="row">
             <div className="label">Push通知</div>
             <div style={{ display: "grid", gap: 10 }}>
               {!canRequest ? (
                 <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5 }}>
-                  この端末/ブラウザでは Push通知が利用できません。
+                  この端末では利用できません
                 </div>
               ) : permission === "granted" ? (
                 <div className="pushGrantRow">
@@ -1231,28 +1195,18 @@ function SettingsModal({
                       className="btn small pushTestBtn"
                       onClick={() => onSendTestPush?.(fcmToken)}
                       disabled={!canTest || !!testPushState?.loading}
-                      title="5秒後にテスト通知を鳴らします"
                     >
                       {testPushState?.loading ? "送信中…" : "テスト（5秒後）"}
                     </button>
                   </div>
-                </div>
-              ) : permission === "denied" ? (
-                <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.6 }}>
-                  ブロックされています。ブラウザの設定から通知を許可してください。
                 </div>
               ) : (
                 <button type="button" className="btn" onClick={onRequestPushPermission}>
                   通知を許可する
                 </button>
               )}
-              <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
-                ※iPhoneは「ホーム画面追加」をしてからテストしてください。
-              </div>
             </div>
           </div>
-
-          {/* 1つ目タイマー */}
           <div className="row">
             <div className="label">1つ目タイマー</div>
             <select
@@ -1266,8 +1220,6 @@ function SettingsModal({
               ))}
             </select>
           </div>
-
-          {/* 2つ目タイマー */}
           <div className="row">
             <div className="label">2つ目タイマー</div>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
@@ -1286,7 +1238,6 @@ function SettingsModal({
             </div>
             {!timer2GateOpen ? <div className="hint">PRO版で解放</div> : null}
           </div>
-
           <div className="row">
             <div className="label">2回目（分前）</div>
             <select
@@ -1301,8 +1252,6 @@ function SettingsModal({
               ))}
             </select>
           </div>
-
-          {/* 通知タップ先（競輪） */}
           <div className="row">
             <div className="label">通知先(競輪)</div>
             <select
@@ -1316,8 +1265,6 @@ function SettingsModal({
               ))}
             </select>
           </div>
-
-          {/* 通知タップ先（オート） */}
           <div className="row">
             <div className="label">通知先(オート)</div>
             <select
@@ -1331,8 +1278,6 @@ function SettingsModal({
               ))}
             </select>
           </div>
-
-          {/* 有料コード */}
           <div className="row">
             <div className="label">コード入力</div>
             <div style={{ display: "grid", gap: 8 }}>
@@ -1360,25 +1305,21 @@ function SettingsModal({
               </div>
             </div>
           </div>
-
           <div className="row">
             <div className="label">通知上限</div>
             <div style={{ fontWeight: 800 }}>
               現在：{selectedCount} 件 / 上限：{maxNotifications} 件
             </div>
           </div>
-
           <div className="row">
             <div className="label">選択のリセット</div>
             <div style={{ display: "grid", gap: 8 }}>
               <button type="button" className="btn danger" onClick={resetAllSelections}>
                 すべて解除
               </button>
-              <div style={{ fontSize: 12, opacity: 0.7 }}>現在の通知数：{selectedCount}</div>
             </div>
           </div>
         </div>
-
         <div className="modalFoot">
           <button type="button" className="btn" onClick={onClose}>
             閉じる
@@ -1408,25 +1349,14 @@ const styles = {
     borderBottom: "1px solid rgba(0,0,0,0.06)",
     padding: "12px 12px 10px",
   },
-  headerTop: {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 10,
-  },
+  headerTop: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 },
   titleRow: { display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 },
   title: { fontSize: 18, fontWeight: 900, letterSpacing: 0.2, whiteSpace: "nowrap" },
   dateInline: { fontSize: 12, fontWeight: 700, opacity: 0.7, whiteSpace: "nowrap" },
   rightHead: { display: "flex", alignItems: "center", gap: 10, flexWrap: "nowrap" },
   modeRow: { marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 },
   modeSwitch: { display: "flex", gap: 8, flexWrap: "wrap" },
-  main: {
-    padding: 14,
-    maxWidth: 820,
-    margin: "0 auto",
-    display: "grid",
-    gap: 12,
-  },
+  main: { padding: 14, maxWidth: 820, margin: "0 auto", display: "grid", gap: 12 },
 };
 
 const cssText = `
@@ -1457,10 +1387,7 @@ input{ width: 100%; }
   box-shadow: var(--shadow);
   padding: 12px;
 }
-.card.error{
-  border-color: rgba(220,0,0,0.20);
-  background: rgba(255,240,240,0.92);
-}
+.card.error{ border-color: rgba(220,0,0,0.20); background: rgba(255,240,240,0.92); }
 .chip{
   border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.95);
@@ -1470,10 +1397,7 @@ input{ width: 100%; }
   font-weight: 900;
   white-space: nowrap;
 }
-.chipOn{
-  border-color: rgba(46,111,62,0.28);
-  background: var(--accent2);
-}
+.chipOn{ border-color: rgba(46,111,62,0.28); background: var(--accent2); }
 .iconBtn{
   border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.95);
@@ -1497,10 +1421,7 @@ input{ width: 100%; }
   font-weight: 900;
 }
 .btn.small{ padding: 8px 10px; font-size: 12px; border-radius: 12px; }
-.btn.danger{
-  border-color: rgba(220,0,0,0.22);
-  background: rgba(255,240,240,0.9);
-}
+.btn.danger{ border-color: rgba(220,0,0,0.22); background: rgba(255,240,240,0.9); }
 .adBar{
   border: 1px dashed rgba(0,0,0,0.14);
   background: rgba(0,0,0,0.02);
@@ -1509,218 +1430,96 @@ input{ width: 100%; }
 }
 .adText{ font-weight: 900; }
 .adSub{ font-size: 12px; opacity: 0.75; margin-top: 2px; }
-.tinyMeta{
-  display:flex;
-  align-items:center;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
+.tinyMeta{ display:flex; alignItems:center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .tinyCount{ font-size: 12px; opacity: 0.7; white-space: nowrap; }
 .pill{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid rgba(0,0,0,0.12);
-  font-weight: 900;
-  font-size: 12px;
-  white-space: nowrap;
+  display:inline-flex; alignItems:center; justify-content:center;
+  padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.12);
+  font-weight: 900; font-size: 12px; white-space: nowrap;
 }
-.pillOn{
-  background: var(--accent2);
-  border-color: rgba(46,111,62,0.25);
-}
-.pillOff{
-  background: rgba(0,0,0,0.02);
-  opacity: 0.9;
-}
-.venueHead{
-  display:flex;
-  align-items:center;
-  justify-content: space-between;
-  gap: 10px;
-  cursor: pointer;
-}
+.pillOn{ background: var(--accent2); border-color: rgba(46,111,62,0.25); }
+.pillOff{ background: rgba(0,0,0,0.02); opacity: 0.9; }
+.venueHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; cursor: pointer; }
 .venueTitle{ display:flex; align-items:center; gap: 10px; min-width: 0; }
-.venueName{
-  font-weight: 900;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 46vw;
-}
+.venueName{ font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
 .chev{ opacity: 0.7; }
 .grade{
-  font-size: 12px;
-  border: 1px solid rgba(0,0,0,0.12);
-  border-radius: 999px;
-  padding: 4px 8px;
-  opacity: 0.8;
-  white-space: nowrap;
+  font-size: 12px; border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 999px; padding: 4px 8px; opacity: 0.8; white-space: nowrap;
 }
 .venueActions{ display:flex; gap: 8px; flex: 0 0 auto; }
 .smallBtn{
-  border: 1px solid rgba(0,0,0,0.12);
-  background: #fff;
-  padding: 8px 10px;
-  border-radius: 12px;
-  cursor:pointer;
-  font-weight: 900;
+  border: 1px solid rgba(0,0,0,0.12); background: #fff;
+  padding: 8px 10px; border-radius: 12px; cursor:pointer; font-weight: 900;
 }
 .smallBtn.on{ background: var(--accent2); border-color: rgba(46,111,62,0.25); }
 .smallBtn.off{ background: rgba(0,0,0,0.02); }
 .raceList{ margin-top: 10px; display:grid; gap: 10px; }
 .raceRow{
-  display:flex;
-  gap: 10px;
-  align-items: stretch;
-  border: 1px solid rgba(0,0,0,0.08);
-  background: rgba(255,255,255,0.75);
-  border-radius: 16px;
-  padding: 10px;
+  display:flex; gap: 10px; align-items: stretch;
+  border: 1px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.75);
+  border-radius: 16px; padding: 10px;
 }
 .raceRow.ended{ opacity: 0.50; filter: grayscale(20%); }
 .raceLeft{ flex: 1 1 auto; min-width: 0; }
 .raceRight{ flex: 0 0 auto; display:flex; align-items:center; }
-.raceTopLine{
-  display:flex;
-  align-items:center;
-  gap: 10px;
-  flex-wrap: wrap;
-}
+.raceTopLine{ display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
 .raceNo{ font-weight: 900; white-space: nowrap; }
-.raceTitle{
-  font-weight: 800;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.raceTitle{ font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .raceDeadline{ font-size: 12px; opacity: 0.85; white-space: nowrap; }
-.raceLink{
-  font-size: 12px;
-  font-weight: 900;
-  color: var(--ink);
-  text-decoration: underline;
-  white-space: nowrap;
-  cursor: pointer;
-}
+.raceLink{ font-size: 12px; font-weight: 900; color: var(--ink); text-decoration: underline; white-space: nowrap; cursor: pointer; }
 .raceLink:hover{ opacity: 0.7; }
+.racePlayers{
+  font-size: 12px; margin-top: 6px; color: #555;
+  line-height: 1.4; opacity: 0.9;
+  word-break: break-all;
+}
 .toggleWrap{ padding-left: 6px; }
 .toggle{ position: relative; display:inline-block; width: 54px; height: 32px; }
 .toggle input{ position:absolute; inset:0; opacity:0; width:100%; height:100%; cursor:pointer; }
 .slider{
   position:absolute; cursor:pointer; inset:0;
-  background: rgba(0,0,0,0.18);
-  border: 1px solid rgba(0,0,0,0.10);
-  transition: .15s;
-  border-radius: 999px;
+  background: rgba(0,0,0,0.18); border: 1px solid rgba(0,0,0,0.10);
+  transition: .15s; border-radius: 999px;
 }
 .slider:before{
-  content:"";
-  position:absolute;
-  height: 24px; width: 24px;
-  left: 3px; top: 3px;
-  background: #fff;
-  transition: .15s;
-  border-radius: 999px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.16);
+  content:""; position:absolute; height: 24px; width: 24px;
+  left: 3px; top: 3px; background: #fff;
+  transition: .15s; border-radius: 999px; box-shadow: 0 4px 12px rgba(0,0,0,0.16);
 }
-.toggle input:checked + .slider{
-  background: var(--accent);
-  border-color: rgba(46,111,62,0.30);
-}
+.toggle input:checked + .slider{ background: var(--accent); border-color: rgba(46,111,62,0.30); }
 .toggle input:checked + .slider:before{ transform: translateX(22px); }
-.pageHead{
-  display:flex;
-  align-items:center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 10px;
-}
+.pageHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
 .pageTitle{ font-size: 16px; font-weight: 900; }
 .notifyList{ display:grid; gap: 10px; }
 .notifyRowSimple{
-  display:flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  border: 1px solid rgba(0,0,0,0.08);
-  background: rgba(255,255,255,0.75);
-  border-radius: 16px;
-  padding: 10px;
+  display:flex; align-items: center; justify-content: space-between; gap: 10px;
+  border: 1px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.75);
+  border-radius: 16px; padding: 10px;
 }
 .notifyLeftSimple{ flex: 1 1 auto; min-width: 0; }
 .notifyRightSimple{ flex: 0 0 auto; display:flex; align-items:center; gap: 8px; }
 .notifyLine{ display:flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .notifyName{ font-weight: 900; white-space: nowrap; }
-.notifyTitle{
-  font-weight: 800;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.notifyTitle{ font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .notifyDeadline{ font-size: 12px; opacity: 0.85; white-space: nowrap; }
-.notifyLink{
-  font-size: 12px;
-  font-weight: 900;
-  color: var(--ink);
-  text-decoration: underline;
-  white-space: nowrap;
-}
+.notifyLink{ font-size: 12px; font-weight: 900; color: var(--ink); text-decoration: underline; white-space: nowrap; }
 .notifyLink:hover{ opacity: 0.7; }
 .modalBack{
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.35);
-  display:flex;
-  align-items: flex-start;
-  justify-content: center;
-  padding: 24px 16px 16px;
-  z-index: 50;
+  position: fixed; inset: 0; background: rgba(0,0,0,0.35);
+  display:flex; align-items: flex-start; justify-content: center;
+  padding: 24px 16px 16px; z-index: 50;
 }
 .modal{
-  width: min(720px, 100%);
-  background: #fff;
-  border-radius: 20px;
-  border: 1px solid rgba(0,0,0,0.10);
-  box-shadow: 0 18px 40px rgba(0,0,0,0.22);
-  overflow: hidden;
-  max-height: calc(100vh - 40px);
-  display: flex;
-  flex-direction: column;
+  width: min(720px, 100%); background: #fff; border-radius: 20px;
+  border: 1px solid rgba(0,0,0,0.10); box-shadow: 0 18px 40px rgba(0,0,0,0.22);
+  overflow: hidden; max-height: calc(100vh - 40px); display: flex; flex-direction: column;
 }
-.modalHead{
-  display:flex;
-  align-items:center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 12px;
-  border-bottom: 1px solid rgba(0,0,0,0.06);
-}
+.modalHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; padding: 12px 12px; border-bottom: 1px solid rgba(0,0,0,0.06); }
 .modalTitle{ font-weight: 900; }
-.modalBody{
-  padding: 12px;
-  display:grid;
-  gap: 10px;
-  overflow: auto;
-  min-height: 0;
-}
-.modalFoot{
-  padding: 12px;
-  border-top: 1px solid rgba(0,0,0,0.06);
-  display:flex;
-  justify-content: flex-end;
-}
-.row{
-  display:grid;
-  grid-template-columns: 160px 1fr;
-  gap: 10px;
-  align-items: center;
-}
+.modalBody{ padding: 12px; display:grid; gap: 10px; overflow: auto; min-height: 0; }
+.modalFoot{ padding: 12px; border-top: 1px solid rgba(0,0,0,0.06); display:flex; justify-content: flex-end; }
+.row{ display:grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: center; }
 .label{ font-size: 13px; font-weight: 900; opacity: 0.80; }
 .hint{ margin-top: 6px; font-size: 12px; opacity: 0.72; }
 @media (max-width: 560px){
@@ -1729,19 +1528,8 @@ input{ width: 100%; }
 }
 .pushGrantRow{ display:flex; align-items:center; justify-content: space-between; gap: 12px; }
 .pushGrantLeft{ flex: 0 0 auto; }
-.pushGrantRight{
-  display:flex;
-  align-items:center;
-  gap: 10px;
-  flex: 0 0 auto;
-  position: relative;
-  z-index: 10000;
-}
-.pushTestBtn{
-  pointer-events: auto !important;
-  position: relative;
-  z-index: 10001;
-}
+.pushGrantRight{ display:flex; align-items:center; gap: 10px; flex: 0 0 auto; position: relative; z-index: 10000; }
+.pushTestBtn{ pointer-events: auto !important; position: relative; z-index: 10001; }
 .settingsHeader, .settingsHeaderRight{ position: relative; z-index: 9999; }
 .settingsHeaderRight button{ position: relative; z-index: 10000; pointer-events: auto; }
 .codeRow{ display:flex; gap: 10px; align-items:center; }
