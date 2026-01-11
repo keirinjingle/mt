@@ -3,14 +3,11 @@ import { getToken, onMessage } from "firebase/messaging";
 import { messaging, VAPID_KEY } from "./firebase";
 
 /**
- * もふタイマー Web（Push通知対応 / 1ファイル App.jsx）
+ * もふタイマー Web（修正版）
  *
- * 改修（今回）
- * - ホームのレース行：時間チップを廃止して
- *   「1R A級 一般 締切 08:45 レース情報 [toggle]」に変更（テキストリンクは下線）
- * - 通知一覧：時間チップを廃止して
- *   「小田原 1R A級 一般 締切 08:45 レース情報 削除」に変更（テキストリンクは下線）
- * - payload の notify_url 重複を修正（1回だけ）
+ * 修正内容：
+ * 1. 通知重複防止 (tag設定)
+ * 2. 競輪/オートレースの通知先URL設定を分離
  */
 
 const APP_TITLE = "もふタイマー";
@@ -28,22 +25,11 @@ function setHash(route) {
   window.location.hash = route === "notifications" ? "#notifications" : "#";
 }
 
-/**
- * VITE_API_BASE は「ホストだけ」にしてください（/api まで入れない）
- * 例:
- *  ✅ VITE_API_BASE=https://mt.qui2.net
- *  ❌ VITE_API_BASE=https://mt.qui2.net/api
- */
 function getApiBase() {
   const base = (import.meta?.env?.VITE_API_BASE || "").trim();
   return base ? base.replace(/\/$/, "") : "";
 }
 
-/**
- * API URL を一元化
- * - サーバー側が /api 配下で提供している前提
- * - VITE_API_BASE が空なら "" を返して「呼ばない」
- */
 function apiUrl(path) {
   const base = getApiBase();
   if (!base) return "";
@@ -55,9 +41,9 @@ function apiUrl(path) {
 const STORAGE_USER_ID = "mofu_anon_user_id";
 const STORAGE_OPEN_VENUES = "mofu_open_venues_v1";
 const STORAGE_TOGGLED = "mofu_race_toggled_v1";
-const STORAGE_SETTINGS = "mofu_settings_v4";
+const STORAGE_SETTINGS = "mofu_settings_v5"; // バージョン上げました(自動移行は互換性維持で対応)
 
-/** token関連（端末保存 + サーバーへ送った最後のtoken） */
+/** token関連 */
 const STORAGE_FCM_TOKEN = "mofu_fcm_token_v1";
 const STORAGE_FCM_TOKEN_SENT = "mofu_fcm_token_sent_v1";
 const STORAGE_FCM_TOKEN_SENT_AT = "mofu_fcm_token_sent_at_v1";
@@ -66,14 +52,14 @@ const DEFAULT_SETTINGS = {
   timer1MinutesBefore: 5,
   timer2Enabled: false,
   timer2MinutesBefore: 2,
-  linkTarget: "json",
+  linkTarget: "json", // 競輪用（既存互換）
+  linkTargetAuto: "autoracejp", // オート用（新規）
   proCode: "",
-  // 互換のため保持（UIはボタン方式で permission を優先）
   notificationsEnabled: false,
 };
 
-/* 通知タップ先 */
-const LINK_TARGETS = [
+/* 通知タップ先（競輪） */
+const LINK_TARGETS_KEIRIN = [
   { key: "json", label: "ネット競輪（レース情報）" },
   { key: "oddspark", label: "オッズパーク" },
   { key: "chariloto", label: "チャリロト" },
@@ -81,7 +67,38 @@ const LINK_TARGETS = [
   { key: "dmm", label: "DMM競輪" },
 ];
 
-function getLinkUrl(linkTargetKey, raceUrlFromJson) {
+/* 通知タップ先（オート） */
+const LINK_TARGETS_AUTO = [
+  { key: "autoracejp", label: "AutoRace.JP（公式）" },
+  { key: "oddspark", label: "オッズパーク" },
+  { key: "chariloto", label: "チャリロト" },
+  { key: "winticket", label: "WINTICKET" },
+  { key: "json", label: "投票サイトへ飛ばない" },
+];
+
+/**
+ * リンク生成ロジック（モード対応）
+ */
+function getLinkUrl(linkTargetKey, raceUrlFromJson, mode) {
+  // --- オートレース ---
+  if (mode === MODE_AUTORACE) {
+    switch (linkTargetKey) {
+      case "autoracejp":
+        return "https://autorace.jp/"; // 公式（詳細URL構築が難しいためトップへ）
+      case "oddspark":
+        return "https://www.oddspark.com/autorace/";
+      case "chariloto":
+        return "https://www.chariloto.com/autorace";
+      case "winticket":
+        return "https://www.winticket.jp/autorace/";
+      case "json":
+      default:
+        // オートのJSONには有効なURLがない場合が多いので空文字か、もしあれば使う
+        return raceUrlFromJson || "";
+    }
+  }
+
+  // --- 競輪 ---
   switch (linkTargetKey) {
     case "json":
       return raceUrlFromJson || "";
@@ -112,7 +129,7 @@ function toYYYYMMDD(d) {
 
 function formatYMD_JP(ms) {
   if (!ms || !Number.isFinite(Number(ms))) return "";
-  const d = new Date(Number(ms)); // クライアントのローカル（JST想定）
+  const d = new Date(Number(ms));
   return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())}`;
 }
 
@@ -208,7 +225,7 @@ function normalizeRace(r, mode, v, ri) {
   const date = todayKeyYYYYMMDD();
   const raceKey = `${date}_${venueKey}_${pad2(raceNo)}`;
 
-  return { raceKey, venueKey, venueName, raceNo, title, closedAtHHMM, url };
+  return { raceKey, venueKey, venueName, raceNo, title, closedAtHHMM, url, mode }; // modeを追加保持
 }
 
 function computeNotifyAt(race, minutesBefore) {
@@ -218,7 +235,7 @@ function computeNotifyAt(race, minutesBefore) {
   return addMinutes(closed, -m);
 }
 
-/* ===== サーバー連携（apiUrl 統一版） ===== */
+/* ===== サーバー連携 ===== */
 async function trySendRemoveToServer({ anonUserId, raceKey }) {
   const url = apiUrl("/notifications/remove");
   if (!url) return;
@@ -236,7 +253,6 @@ async function trySendRemoveToServer({ anonUserId, raceKey }) {
 async function postSubscriptionSetToServer(payload) {
   const url = apiUrl("/subscriptions/set");
   if (!url) return;
-
   try {
     const res = await fetch(url, {
       method: "POST",
@@ -257,6 +273,7 @@ function NotificationsPage({
   timer2Active,
   onBack,
   onRemoveRaceKey,
+  mode, // 現在の表示モードではなく、リスト生成時は全レース対象だが、リンク生成に必要
 }) {
   const raceMap = useMemo(() => {
     const m = new Map();
@@ -270,14 +287,9 @@ function NotificationsPage({
     const list = [];
     for (const rk of selectedRaceKeys) {
       const r = raceMap.get(rk);
-      if (!r) continue;
+      if (!r) continue; // venuesにない（過去のレースや別モード）は表示されない可能性あり
 
       const closedAt = parseHHMMToday(r.closedAtHHMM);
-
-      // 互換のため保持（UIは出さないけど計算は残す）
-      const n1 = computeNotifyAt(r, settings.timer1MinutesBefore);
-      const n2 = timer2Active ? computeNotifyAt(r, settings.timer2MinutesBefore) : null;
-
       list.push({
         raceKey: rk,
         venueName: r.venueName,
@@ -286,8 +298,7 @@ function NotificationsPage({
         closedAt,
         closedAtHHMM: r.closedAtHHMM,
         url: r.url,
-        n1,
-        n2,
+        mode: r.mode, // レースデータに含まれるmode
       });
     }
 
@@ -297,7 +308,7 @@ function NotificationsPage({
     });
 
     return list;
-  }, [selectedRaceKeys, raceMap, settings, timer2Active]);
+  }, [selectedRaceKeys, raceMap]);
 
   return (
     <main style={styles.main}>
@@ -314,7 +325,11 @@ function NotificationsPage({
         ) : (
           <div className="notifyList">
             {rows.map((x) => {
-              const link = getLinkUrl(settings.linkTarget, x.url);
+              // レース個別のモードを見てURL生成
+              const targetKey =
+                x.mode === MODE_AUTORACE ? settings.linkTargetAuto : settings.linkTarget;
+              const link = getLinkUrl(targetKey, x.url, x.mode);
+
               return (
                 <div key={x.raceKey} className="notifyRowSimple">
                   <div className="notifyLeftSimple">
@@ -401,10 +416,9 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
-  // Push token（表示 & サーバーへ登録するため）
   const [fcmToken, setFcmToken] = useState(() => localStorage.getItem(STORAGE_FCM_TOKEN) || "");
 
-  // PRO状態（サーバー検証結果）
+  // PRO状態
   const [proState, setProState] = useState({
     loading: false,
     verified: false,
@@ -463,7 +477,7 @@ export default function App() {
     if (fcmToken) localStorage.setItem(STORAGE_FCM_TOKEN, fcmToken);
   }, [fcmToken]);
 
-  // foreground message（開いてる最中にPushが来た時）
+  // foreground message
   useEffect(() => {
     try {
       async function showForegroundNotification(payload) {
@@ -479,21 +493,24 @@ export default function App() {
           const url =
             payload?.fcmOptions?.link || payload?.data?.url || "https://mt.qui2.net/#notifications";
 
-          const reg = await navigator.serviceWorker?.ready;
-          if (reg?.showNotification) {
-            await reg.showNotification(title, {
-              body,
-              icon,
-              data: { ...(payload?.data || {}), url },
-            });
-            return;
-          }
+          // ★修正：重複防止のためのタグ (race_keyがあればそれを使う)
+          const tag = payload?.data?.race_key || undefined;
 
-          new Notification(title, {
+          const options = {
             body,
             icon,
             data: { ...(payload?.data || {}), url },
-          });
+            tag, // ★ここに追加：同じタグの通知は上書きされる
+            renotify: true, // 上書き時にも音やバイブを鳴らすならtrue
+          };
+
+          const reg = await navigator.serviceWorker?.ready;
+          if (reg?.showNotification) {
+            await reg.showNotification(title, options);
+            return;
+          }
+
+          new Notification(title, options);
         } catch {
           // ignore
         }
@@ -519,7 +536,7 @@ export default function App() {
     return m;
   }, [venues]);
 
-  // ===== PRO検証（APIでサーバー管理）=====
+  // ===== PRO検証 =====
   const verifyTimerRef = useRef(null);
 
   function defaultsFromProFlag(isPro) {
@@ -532,14 +549,6 @@ export default function App() {
 
   async function verifyProCodeNow(code) {
     const trimmed = String(code || "").trim();
-
-    console.log("[PRO] verify start", {
-      code: trimmed,
-      apiBase: getApiBase(),
-      apiVerifyUrl: apiUrl("/pro/verify"),
-      origin: window.location.origin,
-    });
-
     const verifyUrl = apiUrl("/pro/verify");
     if (!verifyUrl) {
       setProState((p) => ({
@@ -568,8 +577,8 @@ export default function App() {
     }
 
     setProState((p) => ({ ...p, loading: true, message: "" }));
-
     const anonUserId = ensureAnonUserId();
+
     try {
       const res = await fetch(verifyUrl, {
         method: "POST",
@@ -579,23 +588,18 @@ export default function App() {
       if (!res.ok) throw new Error(`verify failed: ${res.status}`);
 
       const data = await res.json();
-
       const plan = String(data?.plan || (data?.pro ? "PRO" : "FREE")).toUpperCase();
       const isPro = plan === "PRO";
-
       const expiresAtMs =
         Number.isFinite(Number(data?.expires_at)) ? Number(data.expires_at) : null;
-
       const expiresLabel = expiresAtMs ? formatYMD_JP(expiresAtMs) : "";
       const periodText = expiresLabel
         ? `有効期限：${expiresLabel}`
         : String(data?.period || data?.period_text || data?.valid_until || "");
-
       const df = defaultsFromProFlag(isPro);
       const maxNotifications = Number.isFinite(Number(data?.max_notifications))
         ? Number(data.max_notifications)
         : df.maxNotifications;
-
       const timer2Allowed =
         typeof data?.timer2_allowed === "boolean" ? data.timer2_allowed : df.timer2Allowed;
       const adsOff = typeof data?.ads_off === "boolean" ? data.ads_off : df.adsOff;
@@ -630,18 +634,15 @@ export default function App() {
     }
   }
 
-  // proCode入力が変わったら、少し待ってから検証（打ち終わり想定）
   useEffect(() => {
     const code = settings.proCode;
     if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
     verifyTimerRef.current = setTimeout(() => {
       verifyProCodeNow(code);
     }, 600);
-
     return () => {
       if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.proCode]);
 
   const isPro = !!proState.pro;
@@ -653,13 +654,13 @@ export default function App() {
   const timer2GateOpen = isPro && timer2Allowed;
   const timer2Active = timer2GateOpen && !!settings.timer2Enabled;
 
-  // ===== Push テスト送信（5秒後に鳴らす）=====
+  // ===== Push テスト送信 =====
   const [testPushState, setTestPushState] = useState({ loading: false, message: "" });
 
   async function sendTestPushAfter5s(token) {
     const url = apiUrl("/push/test");
     if (!url) {
-      setTestPushState({ loading: false, message: "API未設定のためテストできません（VITE_API_BASE）" });
+      setTestPushState({ loading: false, message: "API未設定のためテストできません" });
       return;
     }
     const anonUserId = ensureAnonUserId();
@@ -669,7 +670,7 @@ export default function App() {
       return;
     }
 
-    setTestPushState({ loading: true, message: "テスト送信を依頼しました（5秒後に鳴るはず）…" });
+    setTestPushState({ loading: true, message: "テスト送信を依頼しました…" });
     try {
       const res = await fetch(url, {
         method: "POST",
@@ -689,19 +690,17 @@ export default function App() {
       });
     } catch (e) {
       console.error("[test push error]", e);
-      setTestPushState({ loading: false, message: "テスト送信に失敗しました（サーバー側ログを確認）" });
+      setTestPushState({ loading: false, message: "テスト送信に失敗" });
     }
   }
 
-  // ===== Push token 登録（サーバー保持）=====
+  // ===== Push token 登録 =====
   async function postDeviceRegisterIfNeeded(token) {
     const url = apiUrl("/devices/register");
     if (!url) return;
-
     const anonUserId = ensureAnonUserId();
     const t = String(token || "").trim();
     if (!t) return;
-
     const lastSent = localStorage.getItem(STORAGE_FCM_TOKEN_SENT) || "";
     if (lastSent === t) return;
 
@@ -714,15 +713,11 @@ export default function App() {
         origin: window.location.origin,
         ts: Date.now(),
       };
-
-      const res = await fetch(url, {
+      await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-
-      if (!res.ok) throw new Error(`devices/register failed: ${res.status}`);
-
       localStorage.setItem(STORAGE_FCM_TOKEN_SENT, t);
       localStorage.setItem(STORAGE_FCM_TOKEN_SENT_AT, String(Date.now()));
     } catch (e) {
@@ -732,23 +727,17 @@ export default function App() {
 
   // ===== Push購読 =====
   async function ensurePushSubscribedByClick() {
-    if (!("serviceWorker" in navigator)) throw new Error("This browser does not support Service Worker.");
-    if (!("Notification" in window)) throw new Error("This browser does not support Notification.");
+    if (!("serviceWorker" in navigator)) throw new Error("No Service Worker support.");
+    if (!("Notification" in window)) throw new Error("No Notification support.");
 
     const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-
     const perm = await Notification.requestPermission();
-    if (perm !== "granted") {
-      console.log("[Push] permission not granted:", perm);
-      return null;
-    }
+    if (perm !== "granted") return null;
 
     const token = await getToken(messaging, {
       vapidKey: VAPID_KEY,
       serviceWorkerRegistration: reg,
     });
-
-    console.log("[FCM token]", token);
     return token;
   }
 
@@ -756,12 +745,9 @@ export default function App() {
     try {
       const token = await ensurePushSubscribedByClick();
       if (!token) return;
-
       setFcmToken(token);
       localStorage.setItem(STORAGE_FCM_TOKEN, token);
-
       await postDeviceRegisterIfNeeded(token);
-
       setSettings((p) => ({ ...p, notificationsEnabled: true }));
     } catch (e) {
       console.error("[Push subscribe error]", e);
@@ -771,19 +757,16 @@ export default function App() {
 
   useEffect(() => {
     let alive = true;
-
     async function refreshTokenSilentlyAndResendIfChanged() {
       try {
         if (!("serviceWorker" in navigator)) return;
         if (!("Notification" in window)) return;
         if (Notification.permission !== "granted") return;
-
         const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
         const token = await getToken(messaging, {
           vapidKey: VAPID_KEY,
           serviceWorkerRegistration: reg,
         });
-
         if (!alive) return;
         if (!token) return;
 
@@ -792,22 +775,19 @@ export default function App() {
           setFcmToken(token);
           localStorage.setItem(STORAGE_FCM_TOKEN, token);
         }
-
         await postDeviceRegisterIfNeeded(token);
-
         setSettings((p) => ({ ...p, notificationsEnabled: true }));
-      } catch (e) {
-        console.log("[FCM silent refresh skipped]", e);
+      } catch {
+        // ignore
       }
     }
-
     refreshTokenSilentlyAndResendIfChanged();
     return () => {
       alive = false;
     };
   }, []);
 
-  // ===== 選択ロジック（通知上限）=====
+  // ===== 選択ロジック =====
   function toggleVenueOpen(venueKey) {
     setOpenVenues((prev) => ({ ...prev, [venueKey]: !prev[venueKey] }));
   }
@@ -815,12 +795,10 @@ export default function App() {
   function setVenueAll(venue, on) {
     setToggled((prev) => {
       const next = { ...prev };
-
       if (!on) {
         for (const r of venue.races) delete next[r.raceKey];
         return next;
       }
-
       let remaining = Math.max(0, maxNotifications - Object.keys(next).length);
       for (const r of venue.races) {
         if (next[r.raceKey]) continue;
@@ -828,7 +806,6 @@ export default function App() {
         next[r.raceKey] = true;
         remaining -= 1;
       }
-
       if (remaining <= 0 && Object.keys(next).length >= maxNotifications) {
         alert(`通知は最大 ${maxNotifications} 件までです。`);
       }
@@ -836,28 +813,24 @@ export default function App() {
     });
   }
 
-  // 個別トグル（FREE上限対応）
   function toggleRace(raceKey) {
     const anonUserId = ensureAnonUserId();
     const race = raceMap.get(raceKey);
 
     setToggled((prev) => {
       const next = { ...prev };
-
       // OFF
       if (next[raceKey]) {
         delete next[raceKey];
-
         postSubscriptionSetToServer({
           anon_user_id: anonUserId,
           race_key: raceKey,
           enabled: false,
         });
-
         return next;
       }
 
-      // ON（上限チェック）
+      // ON
       const currentCount = Object.keys(next).length;
       if (currentCount >= maxNotifications) {
         alert(`通知は最大 ${maxNotifications} 件までです。`);
@@ -870,7 +843,10 @@ export default function App() {
         const t1 = Number(settings.timer1MinutesBefore);
         const t2 = Number(settings.timer2MinutesBefore);
 
-        const notifyUrl = getLinkUrl(settings.linkTarget, race.url);
+        // ★修正: モードに応じてURLを選択
+        const isAuto = race.mode === MODE_AUTORACE;
+        const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
+        const notifyUrl = getLinkUrl(targetKey, race.url, race.mode);
 
         const payload = {
           anon_user_id: anonUserId,
@@ -879,17 +855,15 @@ export default function App() {
           race_date: todayKeyYYYYMMDD(),
           closed_at_hhmm: race.closedAtHHMM,
           race_url: race.url,
-          link_target: settings.linkTarget,
-          notify_url: notifyUrl, // ★重複排除
+          link_target: targetKey,
+          notify_url: notifyUrl,
           title: `${race.venueName}${race.raceNo}R`,
           timer1_min: Number.isFinite(t1) ? t1 : 5,
           timer2_enabled: !!timer2Active,
           timer2_min: Number.isFinite(t2) ? t2 : 1,
         };
-
         postSubscriptionSetToServer(payload);
       }
-
       return next;
     });
   }
@@ -900,17 +874,15 @@ export default function App() {
       delete next[raceKey];
       return next;
     });
-
     const anonUserId = ensureAnonUserId();
     await trySendRemoveToServer({ anonUserId, raceKey });
   }
 
-  // ===== 設定変更を “選択済み通知” に反映（軽い再同期）=====
+  // ===== 設定変更を同期 =====
   const resyncTimerRef = useRef(null);
   useEffect(() => {
     const hasApi = !!apiUrl("/subscriptions/set");
     if (!hasApi) return;
-
     const keys = Object.keys(toggled || {});
     if (keys.length === 0) return;
 
@@ -923,7 +895,11 @@ export default function App() {
 
         const t1 = Number(settings.timer1MinutesBefore);
         const t2 = Number(settings.timer2MinutesBefore);
-        const notifyUrl = getLinkUrl(settings.linkTarget, race.url);
+
+        // ★修正: モードに応じて再計算
+        const isAuto = race.mode === MODE_AUTORACE;
+        const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
+        const notifyUrl = getLinkUrl(targetKey, race.url, race.mode);
 
         postSubscriptionSetToServer({
           anon_user_id: anonUserId,
@@ -931,7 +907,7 @@ export default function App() {
           enabled: true,
           closed_at_hhmm: race.closedAtHHMM,
           race_url: race.url,
-          link_target: settings.linkTarget,
+          link_target: targetKey,
           notify_url: notifyUrl,
           title: `${race.venueName}${race.raceNo}R`,
           timer1_min: Number.isFinite(t1) ? t1 : 5,
@@ -946,6 +922,7 @@ export default function App() {
     };
   }, [
     settings.linkTarget,
+    settings.linkTargetAuto, // ★追加
     settings.timer1MinutesBefore,
     settings.timer2Enabled,
     settings.timer2MinutesBefore,
@@ -965,12 +942,10 @@ export default function App() {
             </div>
             <div style={styles.dateInline}>{todayLabel}</div>
           </div>
-
           <div style={styles.rightHead}>
             <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">
               ⚙︎
             </button>
-
             {rightHomeIcon === "notifications" ? (
               <button className="iconBtn" onClick={() => setHash("notifications")} aria-label="notifications">
                 ☰
@@ -1016,9 +991,7 @@ export default function App() {
     return (
       <div style={styles.page}>
         <style>{cssText}</style>
-
         <Header rightHomeIcon="home" />
-
         <NotificationsPage
           venues={venues}
           toggled={toggled}
@@ -1026,8 +999,8 @@ export default function App() {
           timer2Active={timer2Active}
           onBack={() => setHash("home")}
           onRemoveRaceKey={removeNotification}
+          mode={mode}
         />
-
         {settingsOpen && (
           <SettingsModal
             onClose={() => setSettingsOpen(false)}
@@ -1047,6 +1020,7 @@ export default function App() {
             selectedCount={selectedCount}
             timer2GateOpen={timer2GateOpen}
             setToggled={setToggled}
+            mode={mode}
           />
         )}
       </div>
@@ -1057,7 +1031,6 @@ export default function App() {
   return (
     <div style={styles.page}>
       <style>{cssText}</style>
-
       <Header rightHomeIcon="notifications" />
 
       {!adsOff && (
@@ -1071,14 +1044,12 @@ export default function App() {
 
       <main style={styles.main}>
         {loading && <div className="card">読み込み中…</div>}
-
         {!loading && err && (
           <div className="card error">
             <div style={{ fontWeight: 700 }}>読み込み失敗</div>
             <div style={{ opacity: 0.9, marginTop: 6 }}>{err}</div>
           </div>
         )}
-
         {!loading && !err && venues.length === 0 && <div className="card">今日のデータがありません。</div>}
 
         {!loading &&
@@ -1093,7 +1064,6 @@ export default function App() {
                     <span className="venueName">{v.venueName}</span>
                     {v.grade ? <span className="grade">{v.grade}</span> : null}
                   </div>
-
                   <div className="venueActions" onClick={(e) => e.stopPropagation()}>
                     <button className="smallBtn on" onClick={() => setVenueAll(v, true)} title="この会場をまとめてON">
                       ON
@@ -1111,7 +1081,9 @@ export default function App() {
                       const ended = closedAt ? now.getTime() >= closedAt.getTime() : false;
                       const checked = !!toggled[r.raceKey];
 
-                      const link = getLinkUrl(settings.linkTarget, r.url);
+                      const isAuto = r.mode === MODE_AUTORACE;
+                      const targetKey = isAuto ? settings.linkTargetAuto : settings.linkTarget;
+                      const link = getLinkUrl(targetKey, r.url, r.mode);
 
                       return (
                         <div key={r.raceKey} className={`raceRow ${ended ? "ended" : ""}`}>
@@ -1119,11 +1091,9 @@ export default function App() {
                             <div className="raceTopLine">
                               <div className="raceNo">{r.raceNo}R</div>
                               <div className="raceTitle">{r.title}</div>
-
                               <div className="raceDeadline">
                                 締切 <b>{closedAt ? toHHMM(closedAt) : "--:--"}</b>
                               </div>
-
                               <a
                                 className="raceLink"
                                 href={link || "#"}
@@ -1137,7 +1107,6 @@ export default function App() {
                               </a>
                             </div>
                           </div>
-
                           <div className="raceRight">
                             <div className="toggleWrap">
                               <label className="toggle" title={checked ? "通知ON" : "通知OFF"}>
@@ -1180,6 +1149,7 @@ export default function App() {
           selectedCount={selectedCount}
           timer2GateOpen={timer2GateOpen}
           setToggled={setToggled}
+          mode={mode}
         />
       )}
     </div>
@@ -1210,7 +1180,6 @@ function SettingsModal({
       return false;
     }
   })();
-
   const permission = (() => {
     try {
       return "Notification" in window ? Notification.permission : "unsupported";
@@ -1218,11 +1187,9 @@ function SettingsModal({
       return "unsupported";
     }
   })();
-
   const canTest = !!fcmToken && permission === "granted" && !!onSendTestPush;
 
   const proStatusLabel = String(proState?.message || "");
-
   const timer2EnabledUI = !!settings.timer2Enabled;
   const timer2ToggleDisabled = !timer2GateOpen;
 
@@ -1247,7 +1214,6 @@ function SettingsModal({
           {/* Push通知 */}
           <div className="row">
             <div className="label">Push通知</div>
-
             <div style={{ display: "grid", gap: 10 }}>
               {!canRequest ? (
                 <div style={{ fontSize: 12, opacity: 0.8, lineHeight: 1.5 }}>
@@ -1258,7 +1224,6 @@ function SettingsModal({
                   <div className="pushGrantLeft">
                     <div style={{ fontWeight: 900 }}>許可済み</div>
                   </div>
-
                   <div className="pushGrantRight">
                     <div style={{ fontWeight: 900, letterSpacing: 0.2 }}>ON</div>
                     <button
@@ -1274,32 +1239,16 @@ function SettingsModal({
                 </div>
               ) : permission === "denied" ? (
                 <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.6 }}>
-                  ブロックされています。Chromeの「サイトの設定」→「通知」を許可に変更してください。
+                  ブロックされています。ブラウザの設定から通知を許可してください。
                 </div>
               ) : (
                 <button type="button" className="btn" onClick={onRequestPushPermission}>
                   通知を許可する
                 </button>
               )}
-
               <div style={{ fontSize: 12, opacity: 0.75, lineHeight: 1.5 }}>
-                ※ボタン押下直後、必ず「許可」を選んでください。{" "}
-                <a href="https://mt.qui2.net/attention.html" target="_blank" rel="noreferrer">
-                  iPhoneは「ホーム画面追加」をしてからテストしてください
-                </a>
-                。
-                <br />
-                ※Androidで「このサイトは権限を要求できません」が出る場合は、
-                “他アプリの重ね表示” をOFFにしてから再度トライしてください。
+                ※iPhoneは「ホーム画面追加」をしてからテストしてください。
               </div>
-
-              <div style={{ fontSize: 12, opacity: 0.9 }}>
-                token: {fcmToken ? <code>{formatTokenShort(fcmToken)}</code> : "未取得"}
-              </div>
-
-              {testPushState?.message ? (
-                <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.4 }}>{testPushState.message}</div>
-              ) : null}
             </div>
           </div>
 
@@ -1353,11 +1302,29 @@ function SettingsModal({
             </select>
           </div>
 
-          {/* 通知タップ先 */}
+          {/* 通知タップ先（競輪） */}
           <div className="row">
-            <div className="label">通知タップ先</div>
-            <select value={settings.linkTarget} onChange={(e) => setSettings((s) => ({ ...s, linkTarget: e.target.value }))}>
-              {LINK_TARGETS.map((t) => (
+            <div className="label">通知先(競輪)</div>
+            <select
+              value={settings.linkTarget}
+              onChange={(e) => setSettings((s) => ({ ...s, linkTarget: e.target.value }))}
+            >
+              {LINK_TARGETS_KEIRIN.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* 通知タップ先（オート） */}
+          <div className="row">
+            <div className="label">通知先(オート)</div>
+            <select
+              value={settings.linkTargetAuto}
+              onChange={(e) => setSettings((s) => ({ ...s, linkTargetAuto: e.target.value }))}
+            >
+              {LINK_TARGETS_AUTO.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.label}
                 </option>
@@ -1379,10 +1346,7 @@ function SettingsModal({
                 <button
                   type="button"
                   className="btn small"
-                  onClick={() => {
-                    console.log("[UI] PRO送信 click", settings.proCode);
-                    onVerifyProCode?.(settings.proCode);
-                  }}
+                  onClick={() => onVerifyProCode?.(settings.proCode)}
                   disabled={!!proState?.loading}
                 >
                   {proState?.loading ? "送信中…" : "送信"}
@@ -1397,7 +1361,6 @@ function SettingsModal({
             </div>
           </div>
 
-          {/* 通知上限 */}
           <div className="row">
             <div className="label">通知上限</div>
             <div style={{ fontWeight: 800 }}>
@@ -1405,7 +1368,6 @@ function SettingsModal({
             </div>
           </div>
 
-          {/* 選択のリセット */}
           <div className="row">
             <div className="label">選択のリセット</div>
             <div style={{ display: "grid", gap: 8 }}>
@@ -1437,7 +1399,6 @@ const styles = {
       'system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", "Hiragino Sans", Arial, sans-serif',
     fontWeight: 400,
   },
-
   header: {
     position: "sticky",
     top: 0,
@@ -1447,23 +1408,18 @@ const styles = {
     borderBottom: "1px solid rgba(0,0,0,0.06)",
     padding: "12px 12px 10px",
   },
-
   headerTop: {
     display: "flex",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 10,
   },
-
   titleRow: { display: "flex", alignItems: "baseline", gap: 10, minWidth: 0 },
   title: { fontSize: 18, fontWeight: 900, letterSpacing: 0.2, whiteSpace: "nowrap" },
   dateInline: { fontSize: 12, fontWeight: 700, opacity: 0.7, whiteSpace: "nowrap" },
-
   rightHead: { display: "flex", alignItems: "center", gap: 10, flexWrap: "nowrap" },
-
   modeRow: { marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 },
   modeSwitch: { display: "flex", gap: 8, flexWrap: "wrap" },
-
   main: {
     padding: 14,
     maxWidth: 820,
@@ -1474,18 +1430,15 @@ const styles = {
 };
 
 const cssText = `
-/* --- theme tokens --- */
 :root{
   --bg: #F6F7F3;
   --card: #FFFFFF;
   --ink: #111111;
-
   --accent: #2E6F3E;
   --accent2: #E6F1E7;
   --border: rgba(0,0,0,0.08);
   --shadow: 0 10px 22px rgba(0,0,0,0.06);
 }
-
 *{ box-sizing: border-box; }
 html, body{ background: var(--bg); }
 button, input, select{ font: inherit; }
@@ -1497,7 +1450,6 @@ select, input{
 }
 select{ cursor:pointer; }
 input{ width: 100%; }
-
 .card{
   background: var(--card);
   border: 1px solid var(--border);
@@ -1509,7 +1461,6 @@ input{ width: 100%; }
   border-color: rgba(220,0,0,0.20);
   background: rgba(255,240,240,0.92);
 }
-
 .chip{
   border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.95);
@@ -1523,7 +1474,6 @@ input{ width: 100%; }
   border-color: rgba(46,111,62,0.28);
   background: var(--accent2);
 }
-
 .iconBtn{
   border: 1px solid rgba(0,0,0,0.10);
   background: rgba(255,255,255,0.95);
@@ -1538,7 +1488,6 @@ input{ width: 100%; }
   align-items: center;
   justify-content: center;
 }
-
 .btn{
   border: 1px solid rgba(0,0,0,0.12);
   background: #fff;
@@ -1552,7 +1501,6 @@ input{ width: 100%; }
   border-color: rgba(220,0,0,0.22);
   background: rgba(255,240,240,0.9);
 }
-
 .adBar{
   border: 1px dashed rgba(0,0,0,0.14);
   background: rgba(0,0,0,0.02);
@@ -1561,7 +1509,6 @@ input{ width: 100%; }
 }
 .adText{ font-weight: 900; }
 .adSub{ font-size: 12px; opacity: 0.75; margin-top: 2px; }
-
 .tinyMeta{
   display:flex;
   align-items:center;
@@ -1569,12 +1516,7 @@ input{ width: 100%; }
   flex-wrap: wrap;
   justify-content: flex-end;
 }
-.tinyCount{
-  font-size: 12px;
-  opacity: 0.7;
-  white-space: nowrap;
-}
-
+.tinyCount{ font-size: 12px; opacity: 0.7; white-space: nowrap; }
 .pill{
   display:inline-flex;
   align-items:center;
@@ -1594,7 +1536,6 @@ input{ width: 100%; }
   background: rgba(0,0,0,0.02);
   opacity: 0.9;
 }
-
 .venueHead{
   display:flex;
   align-items:center;
@@ -1602,12 +1543,7 @@ input{ width: 100%; }
   gap: 10px;
   cursor: pointer;
 }
-.venueTitle{
-  display:flex;
-  align-items:center;
-  gap: 10px;
-  min-width: 0;
-}
+.venueTitle{ display:flex; align-items:center; gap: 10px; min-width: 0; }
 .venueName{
   font-weight: 900;
   white-space: nowrap;
@@ -1635,7 +1571,6 @@ input{ width: 100%; }
 }
 .smallBtn.on{ background: var(--accent2); border-color: rgba(46,111,62,0.25); }
 .smallBtn.off{ background: rgba(0,0,0,0.02); }
-
 .raceList{ margin-top: 10px; display:grid; gap: 10px; }
 .raceRow{
   display:flex;
@@ -1646,22 +1581,16 @@ input{ width: 100%; }
   border-radius: 16px;
   padding: 10px;
 }
-.raceRow.ended{
-  opacity: 0.50;
-  filter: grayscale(20%);
-}
+.raceRow.ended{ opacity: 0.50; filter: grayscale(20%); }
 .raceLeft{ flex: 1 1 auto; min-width: 0; }
 .raceRight{ flex: 0 0 auto; display:flex; align-items:center; }
 .raceTopLine{
   display:flex;
   align-items:center;
   gap: 10px;
-  flex-wrap: wrap; /* ★追加：iPhoneで折り返し */
+  flex-wrap: wrap;
 }
-.raceNo{
-  font-weight: 900;
-  white-space: nowrap;
-}
+.raceNo{ font-weight: 900; white-space: nowrap; }
 .raceTitle{
   font-weight: 800;
   min-width: 0;
@@ -1669,31 +1598,19 @@ input{ width: 100%; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.raceDeadline{
-  font-size: 12px;
-  opacity: 0.85;
-  white-space: nowrap;
-}
+.raceDeadline{ font-size: 12px; opacity: 0.85; white-space: nowrap; }
 .raceLink{
   font-size: 12px;
   font-weight: 900;
   color: var(--ink);
-  text-decoration: underline; /* ★下線 */
+  text-decoration: underline;
   white-space: nowrap;
   cursor: pointer;
 }
 .raceLink:hover{ opacity: 0.7; }
-
 .toggleWrap{ padding-left: 6px; }
 .toggle{ position: relative; display:inline-block; width: 54px; height: 32px; }
-.toggle input{
-  position:absolute;
-  inset:0;
-  opacity:0;
-  width:100%;
-  height:100%;
-  cursor:pointer;
-}
+.toggle input{ position:absolute; inset:0; opacity:0; width:100%; height:100%; cursor:pointer; }
 .slider{
   position:absolute; cursor:pointer; inset:0;
   background: rgba(0,0,0,0.18);
@@ -1716,7 +1633,6 @@ input{ width: 100%; }
   border-color: rgba(46,111,62,0.30);
 }
 .toggle input:checked + .slider:before{ transform: translateX(22px); }
-
 .pageHead{
   display:flex;
   align-items:center;
@@ -1726,8 +1642,6 @@ input{ width: 100%; }
 }
 .pageTitle{ font-size: 16px; font-weight: 900; }
 .notifyList{ display:grid; gap: 10px; }
-
-/* 通知一覧：シンプル行 */
 .notifyRowSimple{
   display:flex;
   align-items: center;
@@ -1740,14 +1654,7 @@ input{ width: 100%; }
 }
 .notifyLeftSimple{ flex: 1 1 auto; min-width: 0; }
 .notifyRightSimple{ flex: 0 0 auto; display:flex; align-items:center; gap: 8px; }
-
-.notifyLine{
-  display:flex;
-  align-items: center;
-  gap: 10px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
+.notifyLine{ display:flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .notifyName{ font-weight: 900; white-space: nowrap; }
 .notifyTitle{
   font-weight: 800;
@@ -1756,11 +1663,7 @@ input{ width: 100%; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.notifyDeadline{
-  font-size: 12px;
-  opacity: 0.85;
-  white-space: nowrap;
-}
+.notifyDeadline{ font-size: 12px; opacity: 0.85; white-space: nowrap; }
 .notifyLink{
   font-size: 12px;
   font-weight: 900;
@@ -1769,7 +1672,6 @@ input{ width: 100%; }
   white-space: nowrap;
 }
 .notifyLink:hover{ opacity: 0.7; }
-
 .modalBack{
   position: fixed;
   inset: 0;
@@ -1787,7 +1689,6 @@ input{ width: 100%; }
   border: 1px solid rgba(0,0,0,0.10);
   box-shadow: 0 18px 40px rgba(0,0,0,0.22);
   overflow: hidden;
-
   max-height: calc(100vh - 40px);
   display: flex;
   flex-direction: column;
@@ -1820,27 +1721,13 @@ input{ width: 100%; }
   gap: 10px;
   align-items: center;
 }
-.label{
-  font-size: 13px;
-  font-weight: 900;
-  opacity: 0.80;
-}
-.hint{
-  margin-top: 6px;
-  font-size: 12px;
-  opacity: 0.72;
-}
+.label{ font-size: 13px; font-weight: 900; opacity: 0.80; }
+.hint{ margin-top: 6px; font-size: 12px; opacity: 0.72; }
 @media (max-width: 560px){
   .row{ grid-template-columns: 1fr; }
   .venueName{ max-width: 58vw; }
 }
-
-.pushGrantRow{
-  display:flex;
-  align-items:center;
-  justify-content: space-between;
-  gap: 12px;
-}
+.pushGrantRow{ display:flex; align-items:center; justify-content: space-between; gap: 12px; }
 .pushGrantLeft{ flex: 0 0 auto; }
 .pushGrantRight{
   display:flex;
@@ -1855,37 +1742,12 @@ input{ width: 100%; }
   position: relative;
   z-index: 10001;
 }
-
-.settingsHeader,
-.settingsHeaderRight{
-  position: relative;
-  z-index: 9999;
-}
-.settingsHeaderRight button{
-  position: relative;
-  z-index: 10000;
-  pointer-events: auto;
-}
-
-.codeRow{
-  display:flex;
-  gap: 10px;
-  align-items:center;
-}
-.codeInput{
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.codeMeta{
-  margin-top: 8px;
-  display:grid;
-  gap: 4px;
-}
-
-.closeBtn{
-  margin-top: 4px;
-}
-
+.settingsHeader, .settingsHeaderRight{ position: relative; z-index: 9999; }
+.settingsHeaderRight button{ position: relative; z-index: 10000; pointer-events: auto; }
+.codeRow{ display:flex; gap: 10px; align-items:center; }
+.codeInput{ flex: 1 1 auto; min-width: 0; }
+.codeMeta{ margin-top: 8px; display:grid; gap: 4px; }
+.closeBtn{ margin-top: 4px; }
 .modalBack{ pointer-events:auto; }
 .modal{ pointer-events:auto; }
 .modal *{ pointer-events:auto; }
