@@ -1540,74 +1540,122 @@ const styles = {
   main: { padding: 14, maxWidth: 820, margin: "0 auto", display: "grid", gap: 12 },
 };
 
+/* src/App.jsx の一番下 */
+
 const cssText = `
-:root{ --bg: #F6F7F3; --card: #FFFFFF; --ink: #111111; --accent: #2E6F3E; --accent2: #E6F1E7; --border: rgba(0,0,0,0.08); --shadow: 0 10px 22px rgba(0,0,0,0.06); }
-*{ box-sizing: border-box; } html, body{ background: var(--bg); }
-button, input, select{ font: inherit; } select, input{ border: 1px solid rgba(0,0,0,0.12); border-radius: 14px; padding: 10px 12px; background: #fff; } select{ cursor:pointer; } input{ width: 100%; }
-.card{ background: var(--card); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); padding: 12px; }
-.card.error{ border-color: rgba(220,0,0,0.20); background: rgba(255,240,240,0.92); }
-.chip{ border: 1px solid rgba(0,0,0,0.10); background: rgba(255,255,255,0.95); padding: 10px 14px; border-radius: 999px; cursor: pointer; font-weight: 900; white-space: nowrap; }
-.chipOn{ border-color: rgba(46,111,62,0.28); background: var(--accent2); }
-.iconBtn{ border: 1px solid rgba(0,0,0,0.10); background: rgba(255,255,255,0.95); width: 48px; height: 48px; border-radius: 16px; cursor: pointer; font-weight: 900; font-size: 20px; line-height: 1; display: inline-flex; align-items: center; justify-content: center; }
-.btn{ border: 1px solid rgba(0,0,0,0.12); background: #fff; padding: 10px 14px; border-radius: 14px; cursor: pointer; font-weight: 900; }
-.btn.small{ padding: 8px 10px; font-size: 12px; border-radius: 12px; }
-.btn.danger{ border-color: rgba(220,0,0,0.22); background: rgba(255,240,240,0.9); }
-.adBar{ border: 1px dashed rgba(0,0,0,0.14); background: rgba(0,0,0,0.02); border-radius: 16px; padding: 10px 12px; }
-.adText{ font-weight: 900; } .adSub{ font-size: 12px; opacity: 0.75; margin-top: 2px; }
+:root{
+  /* 背景を黄色系(#F6F7F3)から、青みのあるクールグレーに変更 → しゃきっとします */
+  --bg: #F1F4F9;
+  --card: #FFFFFF;
+  --ink: #1F2937; /* 真っ黒すぎない、読みやすいダークグレー */
+  
+  /* アクセントを「渋い緑」から「鮮やかなテックブルー」に変更 */
+  /* もし緑がいい場合は #16A34A などにすると元気が出ます */
+  --accent: #2563EB; 
+  --accent2: #EFF6FF; /* 薄い青 */
+  
+  --border: #E5E7EB;
+  /* 影を少し強めにして、カードを浮き上がらせる */
+  --shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+*{ box-sizing: border-box; } html, body{ background: var(--bg); margin: 0; padding: 0; }
+body { color: var(--ink); -webkit-font-smoothing: antialiased; } /* 文字を滑らかに */
+
+button, input, select{ font: inherit; }
+select, input{ border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: #fff; transition: border-color 0.2s; }
+select:focus, input:focus{ outline: none; border-color: var(--accent); ring: 2px solid var(--accent2); }
+select{ cursor:pointer; } input{ width: 100%; }
+
+.card{ background: var(--card); border: 1px solid var(--border); border-radius: 16px; box-shadow: var(--shadow); padding: 16px; margin-bottom: 12px; }
+.card.error{ border-color: #FECACA; background: #FEF2F2; color: #991B1B; }
+
+/* チップ（競輪/オート切り替え） */
+.chip{ border: 1px solid var(--border); background: #fff; padding: 8px 16px; border-radius: 999px; cursor: pointer; font-weight: 700; font-size: 13px; color: #6B7280; transition: all 0.2s; }
+.chipOn{ border-color: var(--accent); background: var(--accent); color: #fff; box-shadow: 0 2px 4px rgba(37, 99, 235, 0.3); }
+
+/* アイコンボタン */
+.iconBtn{ border: 1px solid var(--border); background: #fff; width: 44px; height: 44px; border-radius: 12px; cursor: pointer; font-weight: 700; font-size: 18px; display: inline-flex; align-items: center; justify-content: center; color: #4B5563; transition: background 0.2s; }
+.iconBtn:active{ background: #F3F4F6; transform: translateY(1px); }
+
+/* 通常ボタン */
+.btn{ border: none; background: var(--accent); color: #fff; padding: 10px 16px; border-radius: 12px; cursor: pointer; font-weight: 700; box-shadow: 0 1px 2px rgba(0,0,0,0.1); transition: opacity 0.2s; }
+.btn:hover{ opacity: 0.9; }
+.btn:active{ transform: translateY(1px); }
+.btn.small{ padding: 6px 12px; font-size: 12px; border-radius: 8px; }
+.btn.danger{ background: #EF4444; color: #fff; }
+
+.adBar{ border: 2px dashed #E5E7EB; background: #F9FAFB; border-radius: 12px; padding: 12px; text-align: center; color: #6B7280; }
+.adText{ font-weight: 700; font-size: 13px; } .adSub{ font-size: 11px; margin-top: 4px; }
+
 .tinyMeta{ display:flex; align-items:center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.tinyCount{ font-size: 12px; opacity: 0.7; white-space: nowrap; }
-.pill{ display:inline-flex; align-items:center; justify-content:center; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(0,0,0,0.12); font-weight: 900; font-size: 12px; white-space: nowrap; }
-.pillOn{ background: var(--accent2); border-color: rgba(46,111,62,0.25); } .pillOff{ background: rgba(0,0,0,0.02); opacity: 0.9; }
-.venueHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; cursor: pointer; }
-.venueTitle{ display:flex; align-items:center; gap: 10px; min-width: 0; }
-.venueName{ font-weight: 900; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
-.chev{ opacity: 0.7; } .grade{ font-size: 12px; border: 1px solid rgba(0,0,0,0.12); border-radius: 999px; padding: 4px 8px; opacity: 0.8; white-space: nowrap; }
-.venueActions{ display:flex; gap: 8px; flex: 0 0 auto; }
-.smallBtn{ border: 1px solid rgba(0,0,0,0.12); background: #fff; padding: 8px 10px; border-radius: 12px; cursor:pointer; font-weight: 900; }
-.smallBtn.on{ background: var(--accent2); border-color: rgba(46,111,62,0.25); } .smallBtn.off{ background: rgba(0,0,0,0.02); }
-.raceList{ margin-top: 10px; display:grid; gap: 10px; }
-.raceRow{ display:flex; gap: 10px; align-items: stretch; border: 1px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.75); border-radius: 16px; padding: 10px; }
-.raceRow.ended{ opacity: 0.50; filter: grayscale(20%); }
-.raceLeft{ flex: 1 1 auto; min-width: 0; } .raceRight{ flex: 0 0 auto; display:flex; align-items:center; }
-.raceTopLine{ display:flex; align-items:center; gap: 10px; flex-wrap: wrap; }
-.raceNo{ font-weight: 900; white-space: nowrap; } .raceTitle{ font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.raceDeadline{ font-size: 12px; opacity: 0.85; white-space: nowrap; }
-.raceLink{ font-size: 12px; font-weight: 900; color: var(--ink); text-decoration: underline; white-space: nowrap; cursor: pointer; } .raceLink:hover{ opacity: 0.7; }
-.racePlayers{ font-size: 12px; margin-top: 6px; color: #555; line-height: 1.4; opacity: 0.9; word-break: break-all; }
-.toggleWrap{ padding-left: 6px; } .toggle{ position: relative; display:inline-block; width: 54px; height: 32px; }
-.toggle input{ position:absolute; inset:0; opacity:0; width:100%; height:100%; cursor:pointer; }
-.slider{ position:absolute; cursor:pointer; inset:0; background: rgba(0,0,0,0.18); border: 1px solid rgba(0,0,0,0.10); transition: .15s; border-radius: 999px; }
-.slider:before{ content:""; position:absolute; height: 24px; width: 24px; left: 3px; top: 3px; background: #fff; transition: .15s; border-radius: 999px; box-shadow: 0 4px 12px rgba(0,0,0,0.16); }
-.toggle input:checked + .slider{ background: var(--accent); border-color: rgba(46,111,62,0.30); }
-.toggle input:checked + .slider:before{ transform: translateX(22px); }
-.pageHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-.pageTitle{ font-size: 16px; font-weight: 900; } .notifyList{ display:grid; gap: 10px; }
-.notifyRowSimple{ display:flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid rgba(0,0,0,0.08); background: rgba(255,255,255,0.75); border-radius: 16px; padding: 10px; }
-.notifyLeftSimple{ flex: 1 1 auto; min-width: 0; } .notifyRightSimple{ flex: 0 0 auto; display:flex; align-items:center; gap: 8px; }
-.notifyLine{ display:flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
-.notifyName{ font-weight: 900; white-space: nowrap; } .notifyTitle{ font-weight: 800; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.notifyDeadline{ font-size: 12px; opacity: 0.85; white-space: nowrap; }
-.notifyLink{ font-size: 12px; font-weight: 900; color: var(--ink); text-decoration: underline; white-space: nowrap; } .notifyLink:hover{ opacity: 0.7; }
-.modalBack{ position: fixed; inset: 0; background: rgba(0,0,0,0.35); display:flex; align-items: flex-start; justify-content: center; padding: 24px 16px 16px; z-index: 50; }
-.modal{ width: min(720px, 100%); background: #fff; border-radius: 20px; border: 1px solid rgba(0,0,0,0.10); box-shadow: 0 18px 40px rgba(0,0,0,0.22); overflow: hidden; max-height: calc(100vh - 40px); display: flex; flex-direction: column; }
-.modalHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; padding: 12px 12px; border-bottom: 1px solid rgba(0,0,0,0.06); }
-.modalTitle{ font-weight: 900; } .modalBody{ padding: 12px; display:grid; gap: 10px; overflow: auto; min-height: 0; }
-.modalFoot{ padding: 12px; border-top: 1px solid rgba(0,0,0,0.06); display:flex; justify-content: flex-end; }
-.row{ display:grid; grid-template-columns: 160px 1fr; gap: 10px; align-items: center; }
-.label{ font-size: 13px; font-weight: 900; opacity: 0.80; } .hint{ margin-top: 6px; font-size: 12px; opacity: 0.72; }
-@media (max-width: 560px){ .row{ grid-template-columns: 1fr; } .venueName{ max-width: 58vw; } }
-.pushGrantRow{ display:flex; align-items:center; justify-content: space-between; gap: 12px; }
-.pushGrantLeft{ flex: 0 0 auto; } .pushGrantRight{ display:flex; align-items:center; gap: 10px; flex: 0 0 auto; position: relative; z-index: 10000; }
-.pushTestBtn{ pointer-events: auto !important; position: relative; z-index: 10001; }
-.settingsHeader, .settingsHeaderRight{ position: relative; z-index: 9999; } .settingsHeaderRight button{ position: relative; z-index: 10000; pointer-events: auto; }
-.codeRow{ display:flex; gap: 10px; align-items:center; } .codeInput{ flex: 1 1 auto; min-width: 0; } .codeMeta{ margin-top: 8px; display:grid; gap: 4px; }
-.closeBtn{ margin-top: 4px; } .modalBack{ pointer-events:auto; } .modal{ pointer-events:auto; } .modal *{ pointer-events:auto; }
-/* 既存のcssTextの末尾に追加してください */
-.howtoStep{ margin-bottom: 20px; border-bottom: 1px dashed rgba(0,0,0,0.1); padding-bottom: 20px; }
-.howtoStep:last-child{ border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
-.stepBadge{ display: inline-block; background: var(--accent); color: #fff; font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 4px; margin-bottom: 6px; }
-.stepTitle{ font-size: 16px; font-weight: 900; margin-bottom: 8px; }
-.stepBody{ font-size: 14px; line-height: 1.6; opacity: 0.9; }
-.osBox{ background: #f0f2f5; padding: 10px; border-radius: 8px; font-size: 13px; border: 1px solid rgba(0,0,0,0.05); }
-.hintBox{ margin-top: 10px; background: #fff5e0; color: #8a6d3b; padding: 10px; border-radius: 8px; font-size: 13px; border: 1px solid rgba(255, 200, 0, 0.2); }
+.tinyCount{ font-size: 12px; color: #6B7280; font-feature-settings: "tnum"; }
+.pill{ display:inline-flex; align-items:center; justify-content:center; padding: 4px 10px; border-radius: 999px; font-weight: 800; font-size: 11px; letter-spacing: 0.5px; }
+.pillOn{ background: var(--accent); color: #fff; } .pillOff{ background: #E5E7EB; color: #6B7280; }
+
+/* 会場ヘッダー */
+.venueHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; cursor: pointer; padding-bottom: 4px; }
+.venueTitle{ display:flex; align-items:center; gap: 8px; min-width: 0; }
+.venueName{ font-weight: 800; font-size: 15px; }
+.chev{ color: #9CA3AF; font-size: 12px; }
+.grade{ font-size: 10px; border: 1px solid var(--accent); color: var(--accent); border-radius: 4px; padding: 2px 6px; font-weight: 700; }
+
+.venueActions{ display:flex; gap: 6px; }
+.smallBtn{ border: 1px solid var(--border); background: #fff; padding: 6px 10px; border-radius: 8px; cursor:pointer; font-weight: 700; font-size: 11px; color: #374151; }
+.smallBtn.on{ background: var(--accent2); color: var(--accent); border-color: var(--accent2); }
+
+/* レースリスト */
+.raceList{ margin-top: 12px; display:grid; gap: 8px; }
+.raceRow{ display:flex; gap: 10px; align-items: center; border: 1px solid #F3F4F6; background: #FAFAFA; border-radius: 12px; padding: 10px 12px; transition: background 0.2s; }
+.raceRow.ended{ opacity: 0.6; background: #F3F4F6; }
+
+.raceLeft{ flex: 1 1 auto; min-width: 0; }
+.raceTopLine{ display:flex; align-items:baseline; gap: 8px; flex-wrap: wrap; }
+.raceNo{ font-weight: 800; font-size: 15px; color: var(--ink); width: 28px; }
+.raceTitle{ font-size: 13px; color: #4B5563; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 120px; }
+.raceDeadline{ font-size: 12px; color: #EF4444; font-weight: 700; margin-left: auto; }
+.raceDeadline b{ font-size: 14px; }
+.raceLink{ font-size: 11px; color: var(--accent); text-decoration: none; font-weight: 700; margin-left: 8px; }
+
+.racePlayers{ font-size: 11px; margin-top: 4px; color: #6B7280; }
+
+/* トグルスイッチ */
+.toggleWrap{ padding-left: 8px; }
+.toggle{ position: relative; display:inline-block; width: 48px; height: 28px; }
+.toggle input{ opacity:0; width:0; height:0; }
+.slider{ position:absolute; cursor:pointer; inset:0; background-color: #E5E7EB; transition: .3s; border-radius: 34px; }
+.slider:before{ position:absolute; content:""; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: white; transition: .3s; border-radius: 50%; box-shadow: 0 1px 3px rgba(0,0,0,0.15); }
+input:checked + .slider{ background-color: var(--accent); }
+input:checked + .slider:before{ transform: translateX(20px); }
+
+/* 通知一覧 */
+.pageHead{ display:flex; align-items:center; justify-content: space-between; gap: 10px; margin-bottom: 16px; }
+.pageTitle{ font-size: 20px; font-weight: 800; }
+.notifyList{ display:grid; gap: 10px; }
+.notifyRowSimple{ display:flex; align-items: center; justify-content: space-between; gap: 10px; background: #F9FAFB; border-radius: 12px; padding: 12px; border: 1px solid #F3F4F6; }
+.notifyName{ font-weight: 800; font-size: 14px; }
+
+/* Howtoページ */
+.howtoStep{ margin-bottom: 24px; border-left: 3px solid #E5E7EB; padding-left: 16px; }
+.stepBadge{ display: inline-block; background: var(--accent); color: #fff; font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 4px; margin-bottom: 6px; }
+.stepTitle{ font-size: 16px; font-weight: 800; margin-bottom: 8px; color: var(--ink); }
+.stepBody{ font-size: 14px; line-height: 1.6; color: #4B5563; }
+.osBox{ background: #F3F4F6; padding: 12px; border-radius: 8px; font-size: 13px; margin-top: 8px; }
+.hintBox{ margin-top: 12px; background: #FFF7ED; color: #9A3412; padding: 12px; border-radius: 8px; font-size: 13px; border: 1px solid #FFEDD5; }
+
+/* モーダル */
+.modalBack{ position: fixed; inset: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(2px); display:flex; align-items: flex-end; sm-align-items: center; justify-content: center; z-index: 50; }
+.modal{ width: 100%; max-width: 600px; background: #fff; border-radius: 20px 20px 0 0; overflow: hidden; max-height: 90vh; display: flex; flex-direction: column; animation: slideUp 0.3s ease-out; box-shadow: 0 -4px 20px rgba(0,0,0,0.15); }
+@media (min-width: 600px) { .modal{ border-radius: 20px; margin-bottom: 40px; animation: popIn 0.2s ease-out; } .modalBack{ align-items: center; } }
+
+@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+@keyframes popIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+
+.modalHead{ padding: 16px; border-bottom: 1px solid var(--border); display:flex; justify-content: space-between; align-items: center; background: #F9FAFB; }
+.modalTitle{ font-weight: 800; font-size: 16px; }
+.modalBody{ padding: 20px; overflow-y: auto; display: grid; gap: 20px; }
+.row{ display:grid; grid-template-columns: 140px 1fr; gap: 12px; align-items: center; }
+.label{ font-size: 13px; font-weight: 700; color: #4B5563; }
+.modalFoot{ padding: 16px; border-top: 1px solid var(--border); background: #F9FAFB; display:flex; justify-content: flex-end; }
+.codeRow{ display:flex; gap: 8px; }
 `;
