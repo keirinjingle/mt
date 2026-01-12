@@ -113,7 +113,13 @@ function pad2(n) {
   return String(n).padStart(2, "0");
 }
 function todayKeyYYYYMMDD() {
+/* 変更後：朝5時切り替え対応版 */
+function todayKeyYYYYMMDD() {
   const d = new Date();
+  // もし現在の時間が 0時〜4時 (5時未満) なら、日付を「昨日」に戻す
+  if (d.getHours() < 5) {
+    d.setDate(d.getDate() - 1);
+  }
   return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
 }
 function toYYYYMMDD(d) {
