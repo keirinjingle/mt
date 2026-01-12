@@ -19,7 +19,9 @@ const MODE_AUTORACE = "autorace";
 /* ===== Hash routing ===== */
 function getRouteFromHash() {
   const h = (window.location.hash || "").replace("#", "");
-  return h === "notifications" ? "notifications" : "home";
+  if (h === "notifications") return "notifications";
+  if (h === "howto") return "howto"; // ★追加
+  return "home";
 }
 function setHash(route) {
   window.location.hash = route === "notifications" ? "#notifications" : "#";
@@ -406,6 +408,85 @@ function NotificationsPage({ venues, toggled, settings, onBack, onRemoveRaceKey 
         <div style={{ fontSize: 12, opacity: 0.85, lineHeight: 1.6 }}>
           ・「削除」は端末内の通知リストから外します。<br />
           ・サーバー連携（VITE_API_BASE）がある場合は同時に削除通知も送ります。
+        </div>
+      </section>
+    </main>
+  );
+}
+/* ===== ページ：使い方ガイド ===== */
+function HowtoPage({ onBack }) {
+  return (
+    <main style={styles.main}>
+      <section className="card">
+        <div className="pageHead">
+          <div className="pageTitle">使い方ガイド</div>
+          <button className="btn" onClick={onBack}>戻る</button>
+        </div>
+
+        <div style={{ display: "grid", gap: 24, padding: "8px 0" }}>
+          
+          {/* STEP 1 */}
+          <div className="howtoStep">
+            <div className="stepBadge">STEP 1</div>
+            <div className="stepTitle">ホーム画面に追加する</div>
+            <div className="stepBody">
+              <div style={{ marginBottom: 8 }}>
+                通知を受け取るには、アプリとしてインストールする必要があります。
+              </div>
+              <div className="osBox">
+                <div style={{ fontWeight: 700, color: "#444", marginBottom: 4 }}>iPhone (iOS) の場合</div>
+                1. <b>Safari</b> でこのページを開く<br />
+                2. 下の「共有ボタン <span style={{ fontSize: 16 }}>⎋</span>」をタップ<br />
+                3. 「<b>ホーム画面に追加</b>」を選択<br />
+                4. 追加されたアイコンから起動する
+              </div>
+              <div className="osBox" style={{ marginTop: 8 }}>
+                <div style={{ fontWeight: 700, color: "#444", marginBottom: 4 }}>Android の場合</div>
+                1. <b>Chrome</b> でこのページを開く<br />
+                2. 右上のメニュー「︙」をタップ<br />
+                3. 「<b>アプリをインストール</b>」を選択
+              </div>
+            </div>
+          </div>
+
+          {/* STEP 2 */}
+          <div className="howtoStep">
+            <div className="stepBadge">STEP 2</div>
+            <div className="stepTitle">通知を許可する</div>
+            <div className="stepBody">
+              1. ホーム画面に追加したアイコンからアプリを起動<br />
+              2. 右上の <b>設定ボタン (⚙️)</b> をタップ<br />
+              3. 「<b>通知を許可する</b>」ボタンを押して許可
+              <div className="hintBox">
+                ⚠️ <b>重要：通知が来ない場合</b><br />
+                スマホの「バッテリー設定」が原因の可能性があります。<br />
+                設定アプリ ＞ アプリ ＞ Chrome (または本アプリ) ＞ バッテリー ＞ <b>「制限なし（最適化しない）」</b> に変更してください。
+              </div>
+            </div>
+          </div>
+
+          {/* STEP 3 */}
+          <div className="howtoStep">
+            <div className="stepBadge">STEP 3</div>
+            <div className="stepTitle">テスト通知を送る</div>
+            <div className="stepBody">
+              設定画面 (⚙️) の中にある「<b>テスト（5秒後）</b>」ボタンを押して、一度アプリを閉じてください。<br />
+              5秒後に「もふタイマー」から通知が届けば準備完了です。
+            </div>
+          </div>
+
+          {/* STEP 4 */}
+          <div className="howtoStep">
+            <div className="stepBadge">STEP 4</div>
+            <div className="stepTitle">タイマーをセット</div>
+            <div className="stepBody">
+              通知を受け取りたいレースのスイッチを <b>ON</b> にするだけです。<br />
+              <br />
+              ・<b>設定 (⚙️)</b> で「5分前」「10分前」などを変更できます。<br />
+              ・レースが終了するか、締切時刻を過ぎると自動的に解除されます。
+            </div>
+          </div>
+
         </div>
       </section>
     </main>
@@ -885,6 +966,7 @@ export default function App() {
           </div>
 
           <div style={styles.rightHead}>
+            <button className="iconBtn" onClick={() => setHash("howto")} aria-label="help">？</button>
             <button className="iconBtn" onClick={() => setSettingsOpen(true)} aria-label="settings">
               ⚙︎
             </button>
@@ -931,6 +1013,17 @@ export default function App() {
           </div>
         </div>
       </header>
+    );
+  }
+
+  // ===== route: howto =====
+  if (route === "howto") {
+    return (
+      <div style={styles.page}>
+        <style>{cssText}</style>
+        <Header rightHomeIcon="home" />
+        <HowtoPage onBack={() => setHash("home")} />
+      </div>
     );
   }
 
@@ -1480,4 +1573,12 @@ button, input, select{ font: inherit; } select, input{ border: 1px solid rgba(0,
 .settingsHeader, .settingsHeaderRight{ position: relative; z-index: 9999; } .settingsHeaderRight button{ position: relative; z-index: 10000; pointer-events: auto; }
 .codeRow{ display:flex; gap: 10px; align-items:center; } .codeInput{ flex: 1 1 auto; min-width: 0; } .codeMeta{ margin-top: 8px; display:grid; gap: 4px; }
 .closeBtn{ margin-top: 4px; } .modalBack{ pointer-events:auto; } .modal{ pointer-events:auto; } .modal *{ pointer-events:auto; }
+/* 既存のcssTextの末尾に追加してください */
+.howtoStep{ margin-bottom: 20px; border-bottom: 1px dashed rgba(0,0,0,0.1); padding-bottom: 20px; }
+.howtoStep:last-child{ border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.stepBadge{ display: inline-block; background: var(--accent); color: #fff; font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 4px; margin-bottom: 6px; }
+.stepTitle{ font-size: 16px; font-weight: 900; margin-bottom: 8px; }
+.stepBody{ font-size: 14px; line-height: 1.6; opacity: 0.9; }
+.osBox{ background: #f0f2f5; padding: 10px; border-radius: 8px; font-size: 13px; border: 1px solid rgba(0,0,0,0.05); }
+.hintBox{ margin-top: 10px; background: #fff5e0; color: #8a6d3b; padding: 10px; border-radius: 8px; font-size: 13px; border: 1px solid rgba(255, 200, 0, 0.2); }
 `;
