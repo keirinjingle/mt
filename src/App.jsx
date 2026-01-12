@@ -1029,6 +1029,29 @@ export default function App() {
         <style>{cssText}</style>
         <Header rightHomeIcon="home" />
         <HowtoPage onBack={() => setHash("home")} />
+        {/* ★ここから追加：設定モーダルの表示コード */}
+        {settingsOpen && (
+          <SettingsModal
+            onClose={() => setSettingsOpen(false)}
+            settings={settings}
+            setSettings={setSettings}
+            fcmToken={fcmToken}
+            onRequestPushPermission={requestPushPermissionAndRegister}
+            onSendTestPush={sendTestPushAfter5s}
+            testPushState={testPushState}
+            proState={proState}
+            isPro={isPro}
+            onVerifyProCode={(code) => {
+              if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
+              verifyProCodeNow(code);
+            }}
+            maxNotifications={maxNotifications}
+            selectedCount={selectedCount}
+            timer2GateOpen={timer2GateOpen}
+            setToggled={setToggled}
+          />
+        )}
+        {/* ★ここまで追加 */}
       </div>
     );
   }
