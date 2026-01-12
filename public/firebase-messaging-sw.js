@@ -1,10 +1,11 @@
 /* public/firebase-messaging-sw.js */
 /* eslint-disable no-undef */
 
-importScripts("https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js");
-importScripts("https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js");
+// ★ v8 -> v9 (Compat) にアップグレード
+importScripts("https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js");
+importScripts("https://www.gstatic.com/firebasejs/9.23.0/firebase-messaging-compat.js");
 
-// Firebase Web Config（公開してOK）
+// Firebase Config
 firebase.initializeApp({
   apiKey: "AIzaSyBDQWarECLOYbAXd4wXb_bmEF2pluKwK9g",
   authDomain: "mofutimer.firebaseapp.com",
@@ -16,78 +17,44 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-/**
- * 通知の見た目（アイコン/バッジ）
- * - Vite の public 配下はサイトルート "/" から参照できる
- * - 例: public/icons/icon-192.png → "/icons/icon-192.png"
- *
- * ※あなたの実ファイル名に合わせて変更してOK
- */
-const NOTIFY_ICON = "/icons/icon-192.png";
-const NOTIFY_BADGE = "/icons/badge-72.png";
-
-/**
- * 通知タップ時の遷移先URLを解決する
- * - サーバーが data.notify_url を入れる想定
- * - 互換で複数キーに対応
- */
-function resolveClickUrl(notification) {
-  const data = (notification && notification.data) || {};
-  return (
-    data.notify_url ||
-    data.url ||
-    data.link ||
-    data.click_action ||
-    "https://mt.qui2.net/#notifications"
-  );
-}
-
+// バックグラウンド通知の処理
 messaging.onBackgroundMessage((payload) => {
-  const title = payload?.notification?.title || "もふタイマー";
-  const body = payload?.notification?.body || "";
-  const data = payload?.data || {};
+  console.log("[SW] Background:", payload);
+  
+  const title = payload?.notification?.title || payload?.data?.title || "もふタイマー";
+  const body = payload?.notification?.body || payload?.data?.body || "";
+  const icon = "/icons/icon-192.png";
+  
+  // サーバーから送られたデータをそのまま通知オプションに渡す
+  const options = {
+    body: body,
+    icon: icon,
+    badge: "/icons/badge-72.png",
+    data: payload.data || {}, // URL情報などがここに入っている
+    tag: payload.data?.race_key, // 重複防止タグ
+    renotify: true // 同じタグでも音を鳴らす設定
+  };
 
-  // notification.data にURLを載せておく（クリックで拾うため）
-  self.registration.showNotification(title, {
-    body,
-    data, // ← payload.data をそのまま載せる（重要）
-    icon: NOTIFY_ICON,
-    badge: NOTIFY_BADGE,
-
-    // あると便利（対応環境のみ）
-    tag: data?.race_key || undefined, // 同一レースはまとめやすい
-    renotify: false,
-  });
+  return self.registration.showNotification(title, options);
 });
 
+// 通知クリック時の処理
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const url = resolveClickUrl(event.notification);
+  // サーバーから受け取ったURL、なければ通知一覧へ
+  const urlToOpen = event.notification.data?.url || 
+                    event.notification.data?.notify_url || 
+                    "https://mt.qui2.net/#notifications";
 
   event.waitUntil(
-    (async () => {
-      // 既に開いてるタブがあればフォーカスして遷移
-      const allClients = await clients.matchAll({
-        type: "window",
-        includeUncontrolled: true,
-      });
-
-      for (const c of allClients) {
-        if ("focus" in c) {
-          await c.focus();
-          try {
-            if (c.navigate) {
-              await c.navigate(url);
-              return;
-            }
-          } catch {
-            // navigateがダメなら openWindow に落とす
-          }
-        }
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      // 既に開いているタブがあればフォーカス
+      for (const client of clientList) {
+        if (client.url === urlToOpen && "focus" in client) return client.focus();
       }
-
-      if (clients.openWindow) return clients.openWindow(url);
-    })()
+      // なければ新しく開く
+      if (clients.openWindow) return clients.openWindow(urlToOpen);
+    })
   );
 });
