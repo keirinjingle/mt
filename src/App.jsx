@@ -24,7 +24,13 @@ function getRouteFromHash() {
   return "home";
 }
 function setHash(route) {
-  window.location.hash = route === "notifications" ? "#notifications" : "#";
+  if (route === "notifications") {
+    window.location.hash = "#notifications";
+  } else if (route === "howto") {
+    window.location.hash = "#howto";
+  } else {
+    window.location.hash = "#";
+  }
 }
 
 function getApiBase() {
