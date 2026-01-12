@@ -162,6 +162,10 @@ function parseHHMMToday(hhmm) {
   const m = hhmm.match(/^(\d{1,2}):(\d{2})$/);
   if (!m) return null;
   const d = new Date();
+  // ★ここを追加：現在が深夜0時〜5時なら、基準日を「昨日」に戻して計算する
+  if (d.getHours() < 5) {
+    d.setDate(d.getDate() - 1);
+  }
   d.setHours(Number(m[1]), Number(m[2]), 0, 0);
   return d;
 }
