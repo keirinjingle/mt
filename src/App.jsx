@@ -112,7 +112,7 @@ function getLinkUrl(linkTargetKey, raceUrlFromJson, mode) {
 function pad2(n) {
   return String(n).padStart(2, "0");
 }
-function todayKeyYYYYMMDD() {
+
 /* 変更後：朝5時切り替え対応版 */
 function todayKeyYYYYMMDD() {
   const d = new Date();
@@ -122,6 +122,7 @@ function todayKeyYYYYMMDD() {
   }
   return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}`;
 }
+
 function toYYYYMMDD(d) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
